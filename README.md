@@ -61,6 +61,7 @@ Playing AGAINST these teams = +42% more cards:
 
 ## 🚀 Usage
 
+### Option 1: CLI Script
 ```bash
 # Clone the repo
 git clone https://github.com/EagleAIbot/Yellow-card-model-epl.git
@@ -75,8 +76,70 @@ pip install -r requirements.txt
 python predict.py 2026-01-18
 ```
 
+### Option 2: REST API (for backend deployment)
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Set environment variables (optional)
+export API_FOOTBALL_KEY=your_key_here
+export PORT=5000
+
+# Run the API
+python api.py
+
+# Or use gunicorn for production
+gunicorn api:app -b 0.0.0.0:5000
+```
+
+#### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/predictions/<date>` | GET | Get predictions for date (YYYY-MM-DD) |
+
+#### Example Request
+```bash
+curl http://localhost:5000/predictions/2026-01-18
+```
+
+#### Example Response
+```json
+{
+  "date": "2026-01-18",
+  "fixtures": 2,
+  "games": [
+    {
+      "home": "Wolverhampton Wanderers",
+      "away": "Newcastle United",
+      "referee": "Sam Barrott",
+      "referee_yc_per_game": 5.1,
+      "is_strict_ref": true,
+      "away_picks": [
+        {
+          "player_name": "Joelinton",
+          "position": "M",
+          "yc_rate": 0.333,
+          "tier": 1,
+          "bet_threshold": 2.1
+        }
+      ]
+    }
+  ],
+  "strategy": "STRICT_REF + AWAY + DEF/MID = 43% hit rate"
+}
+```
+
+### Option 3: Docker
+```bash
+docker build -t yc-model .
+docker run -p 5000:5000 -e API_FOOTBALL_KEY=your_key yc-model
+```
+
 ## 📁 Files
-- `predict.py` - Main prediction script (ULTIMATE v2.0)
+- `predict.py` - CLI prediction script (ULTIMATE v2.0)
+- `api.py` - REST API for backend deployment
 - `config.py` - API key, referee tiers, high-card opponents
 - `data/complete_yc_data.csv` - Historical player data (26,652 records)
 - `data/referee_stats.csv` - Referee strictness stats
