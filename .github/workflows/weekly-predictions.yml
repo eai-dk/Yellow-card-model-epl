@@ -1,0 +1,46 @@
+﻿name: Weekly Yellow Card Predictions
+
+on:
+  # Run every Friday at 9am UTC (before weekend fixtures)
+  schedule:
+    - cron: '0 9 * * 5'
+  
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+    inputs:
+      prediction_date:
+        description: 'Date to predict (YYYY-MM-DD). Leave empty for tomorrow.'
+        required: false
+        default: ''
+
+jobs:
+  generate-predictions:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Calculate prediction date
+        id: date
+        run: |
+          if [ -n "${{ github.event.inputs.prediction_date }}" ]; then
+            echo "date=${{ github.event.inputs.prediction_date }}" >> $GITHUB_OUTPUT
+          else
+            echo "date=$(date -d '+1 day' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run predictions
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          echo "Generating Yellow Card predictions for ${{ steps.date.outputs.date }}"
+          python predict.py ${{ steps.date.outputs.date }}
