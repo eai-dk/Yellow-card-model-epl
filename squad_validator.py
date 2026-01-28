@@ -67,23 +67,37 @@ def find_player_team(player_name: str) -> Optional[str]:
     best_match, best_score = None, 0
     for name, team in player_map.items():
         score = SequenceMatcher(None, normalized, name).ratio()
-        if score > best_score and score > 0.8:
+        if score > best_score and score > 0.85:
             best_score, best_match = score, team
     return best_match
 
 
 def validate_prediction(prediction: Dict) -> Tuple[Dict, bool]:
+    """
+    Validate a prediction. Returns (prediction, is_valid).
+    - If player found: correct team if needed, return True
+    - If player NOT found: keep original, return True (don't filter)
+    - Only return False for empty player names
+    """
     player_name = prediction.get("player_name") or prediction.get("player", "")
     claimed_team = prediction.get("team", "")
     if not player_name:
         return prediction, False
+    
     current_team = find_player_team(player_name)
+    
+    # Player not found in squad data - keep as-is (don't filter)
     if current_team is None:
-        return prediction, False
+        print(f"[SquadValidator] Player not found, keeping: {player_name} ({claimed_team})")
+        return prediction, True
+    
+    # Player found - correct team if different
     if normalize_name(current_team) != normalize_name(claimed_team):
         corrected = prediction.copy()
         corrected["team"] = current_team
+        print(f"[SquadValidator] Corrected: {player_name} {claimed_team} -> {current_team}")
         return corrected, True
+    
     return prediction, True
 
 
