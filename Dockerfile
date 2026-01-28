@@ -7,10 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV PORT=5000
-ENV API_FOOTBALL_KEY=""
+ENV PORT=10000
 
-EXPOSE 5000
+EXPOSE 10000
 
-CMD ["gunicorn", "api:app", "-b", "0.0.0.0:5000", "--workers", "2"]
-
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "10000"]
