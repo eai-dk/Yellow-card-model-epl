@@ -7,6 +7,7 @@ Only shows VALUE picks where edge > threshold
 
 import requests
 import pandas as pd
+import unicodedata
 import sys
 from datetime import datetime, timedelta
 from config import VERY_STRICT_REFS, STRICT_REFS, HIGH_CARD_OPPONENTS
@@ -18,23 +19,105 @@ SPORTMONKS_TOKEN = "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef
 # Edge threshold (only show picks with edge > this)
 MIN_EDGE = 0.05  # 5%
 
-def normalize_name(name: str) -> str:
-    """Normalize player name for matching"""
-    import unicodedata
-    if not name:
+# Player name mapping for edge cases (our data -> SportMonks)
+PLAYER_NAME_MAPPING = {
+    "edward nketiah": "eddie nketiah", "norberto murara neto": "neto",
+    "jorgen strand larsen": "jorgen larsen", "luis guilherme": "luis guilherme lira",
+    "florentino luis": "luis florentino", "jamie gittens": "jamie bynoe-gittens",
+    "omari hutchinson": "omari giraud-hutchinson", "wilfried gnonto": "degnand gnonto",
+    "yehor yarmolyuk": "yegor yarmolyuk", "chido obi-martin": "chidozie obi-martin",
+    "tim iroegbunam": "timothy iroegbunam", "pape matar sarr": "pape sarr",
+    "randal kolo muani": "randal muani", "david moller wolfe": "david wolfe",
+    "yunus konak": "yunus emre konak", "valentin castellanos": "taty castellanos",
+    "rayan ait-nouri": "rayan ait nouri", "amadou diallo": "amad diallo",
+    "jota silva": "jota", "diogo jota": "jota",
+    "tolu arokodare": "toluwalase arokodare",
+    "kiernan dewsbury-hall": "kiernan dewsbury hall",
+    "joao pedro": "joao pedro junqueira",
+    "bruno guimaraes": "bruno guimaraes rodriguez",
+    "lucas paqueta": "lucas paqueta bezerra",
+    "darwin nunez": "darwin nunez ribeiro",
+}
+
+def normalize_player_name(name: str) -> str:
+    """Normalize player name for matching (handles special characters)"""
+    if not name or not isinstance(name, str):
         return ""
-    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
-    return name.lower().strip()
+    special_chars = {
+        'ø': 'o', 'Ø': 'O', 'ß': 'ss', 'ı': 'i', 'İ': 'I',
+        'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D',
+        'æ': 'ae', 'Æ': 'AE', 'œ': 'oe', 'Œ': 'OE',
+    }
+    for char, replacement in special_chars.items():
+        name = name.replace(char, replacement)
+    name = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("ASCII")
+    name = name.lower().strip()
+    for remove in ["jr.", "jr", "ii", "iii", "."]:
+        name = name.replace(remove, "")
+    return " ".join(name.split())
+
+def get_canonical_name(name: str) -> str:
+    """Get canonical name, applying manual mappings"""
+    norm = normalize_player_name(name)
+    return PLAYER_NAME_MAPPING.get(norm, norm)
+
+# Team name mapping (API-Football -> our data)
+TEAM_MAPPING = {
+    "Brighton & Hove Albion": "Brighton",
+    "Brighton and Hove Albion": "Brighton",
+    "Newcastle United": "Newcastle",
+    "Wolverhampton Wanderers": "Wolves",
+    "Wolverhampton": "Wolves",
+    "Nottingham Forest": "Nottingham Forest",
+    "Sheffield United": "Sheffield Utd",
+    "Leicester City": "Leicester",
+    "Ipswich Town": "Ipswich",
+    "West Ham United": "West Ham",
+    "Leeds United": "Leeds",
+    "Tottenham Hotspur": "Tottenham",
+}
+
+def normalize_team(name: str) -> str:
+    """Normalize team name to match our historical data"""
+    return TEAM_MAPPING.get(name, name)
+
+# Referee name mapping (API format -> config format)
+REF_NAME_MAPPING = {
+    "m. oliver": "michael oliver",
+    "s. attwell": "stuart attwell",
+    "a. taylor": "anthony taylor",
+    "m. salisbury": "michael salisbury",
+    "j. brooks": "john brooks",
+    "s. allison": "simon allison",
+    "c. kavanagh": "chris kavanagh",
+    "t. robinson": "tim robinson",
+    "s. barrott": "samuel barrott",
+    "t. bramall": "thomas bramall",
+    "d. bond": "darren bond",
+    "a. madley": "andy madley",
+    "r. jones": "robert jones",
+    "j. gillett": "jarred gillett",
+}
+
+def normalize_ref_name(ref_name: str) -> str:
+    """Normalize referee name"""
+    if not ref_name:
+        return ""
+    ref_lower = ref_name.lower().strip()
+    return REF_NAME_MAPPING.get(ref_lower, ref_lower)
 
 def get_ref_tier(ref_name: str) -> int:
     """0=normal, 1=very strict, 2=strict"""
     if not ref_name or ref_name == "TBD":
         return 0
+
+    ref_norm = normalize_ref_name(ref_name)
+
     for ref in VERY_STRICT_REFS:
-        if ref.lower() in ref_name.lower() or ref_name.lower() in ref.lower():
+        if ref.lower() in ref_norm or ref_norm in ref.lower():
             return 1
     for ref in STRICT_REFS:
-        if ref.lower() in ref_name.lower() or ref_name.lower() in ref.lower():
+        if ref.lower() in ref_norm or ref_norm in ref.lower():
             return 2
     return 0
 
@@ -60,22 +143,23 @@ def get_sportmonks_yc_odds(start_date: str, end_date: str) -> dict:
     }
     resp = requests.get(url, params=params)
     data = resp.json()
-    
-    player_odds = {}  # {normalized_name: {'odds': X, 'original_name': Y}}
-    
+
+    player_odds = {}  # {canonical_name: {'odds': X, 'original_name': Y}}
+
     for fixture in data.get('data', []):
         for odd in fixture.get('odds', []):
             if odd.get('market_id') == 64:  # Player to be booked
                 player_name = odd.get('name')
                 odds_value = odd.get('value')
                 if player_name and odds_value:
-                    norm = normalize_name(player_name)
-                    player_odds[norm] = {
+                    # Use canonical name for better matching
+                    canonical = get_canonical_name(player_name)
+                    player_odds[canonical] = {
                         'odds': float(odds_value),
                         'original_name': player_name,
                         'implied_prob': 1 / float(odds_value)
                     }
-    
+
     return player_odds
 
 def run_weekend_picks():
@@ -104,19 +188,21 @@ def run_weekend_picks():
         fixtures = get_fixtures(date_str)
         
         for fix in fixtures:
-            home = fix["teams"]["home"]["name"]
-            away = fix["teams"]["away"]["name"]
+            home_raw = fix["teams"]["home"]["name"]
+            away_raw = fix["teams"]["away"]["name"]
+            home = normalize_team(home_raw)  # Convert to our data format
+            away = normalize_team(away_raw)
             time = fix["fixture"]["date"][11:16]
             ref = fix["fixture"].get("referee", "TBD")
             ref_name = ref.split(",")[0].strip() if ref else "TBD"
             tier = get_ref_tier(ref_name)
-            
+
             if tier == 0:
                 continue  # Skip non-strict refs
-            
+
             very_strict = tier == 1
             vs_high_card = home in HIGH_CARD_OPPONENTS
-            
+
             # Get away DEF/MID picks (primary)
             away_data = historical[historical["team"] == away]
             away_defmid = away_data[away_data["position"].isin(["D", "M"])]
@@ -134,10 +220,10 @@ def run_weekend_picks():
                     adj_rate = min(p['yc_rate'] * 1.2, 0.55) if very_strict else p['yc_rate']
                     if vs_high_card:
                         adj_rate = min(adj_rate * 1.1, 0.55)
-                    
-                    # Match to odds
-                    norm = normalize_name(p['name'])
-                    odds_data = yc_odds.get(norm)
+
+                    # Match to odds using canonical name
+                    canonical = get_canonical_name(p['name'])
+                    odds_data = yc_odds.get(canonical)
                     
                     if odds_data:
                         implied = odds_data['implied_prob']
@@ -175,8 +261,8 @@ def run_weekend_picks():
                     for _, p in players.iterrows():
                         adj_rate = min(p['yc_rate'] * 1.15, 0.50) if very_strict else p['yc_rate']
 
-                        norm = normalize_name(p['name'])
-                        odds_data = yc_odds.get(norm)
+                        canonical = get_canonical_name(p['name'])
+                        odds_data = yc_odds.get(canonical)
 
                         if odds_data:
                             implied = odds_data['implied_prob']

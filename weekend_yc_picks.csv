@@ -1,7 +1,10 @@
 player,team,pos,game,ref,model_prob,odds,implied_prob,edge,tier,date
 Ollie Watkins,Aston Villa,M,Aston Villa vs Brentford,T. Robinson,0.3833333333333333,7.5,0.13333333333333333,0.24999999999999997,SECONDARY,2026-02-01
 Kiernan Dewsbury-Hall,Everton,M,Brighton vs Everton,C. Kavanagh,0.44,4.33,0.23094688221709006,0.20905311778290994,PRIMARY,2026-01-31
+Savinho,Manchester City,M,Tottenham vs Manchester City,R. Jones,0.33,6.5,0.15384615384615385,0.17615384615384616,PRIMARY,2026-02-01
 Moisés Caicedo,Brighton,M,Brighton vs Everton,C. Kavanagh,0.3833333333333333,4.5,0.2222222222222222,0.1611111111111111,SECONDARY,2026-01-31
 Danny Welbeck,Brighton,M,Brighton vs Everton,C. Kavanagh,0.2875,7.5,0.13333333333333333,0.15416666666666665,SECONDARY,2026-01-31
 Facundo Buonanotte,Brighton,M,Brighton vs Everton,C. Kavanagh,0.345,4.33,0.23094688221709006,0.11405311778290991,SECONDARY,2026-01-31
+Tim Iroegbunam,Everton,M,Brighton vs Everton,C. Kavanagh,0.44,3.0,0.3333333333333333,0.10666666666666669,PRIMARY,2026-01-31
+Antoine Semenyo,Bournemouth,M,Wolves vs Bournemouth,M. Oliver,0.3170731707317073,4.33,0.23094688221709006,0.08612628851461726,PRIMARY,2026-01-31
 Alexis Mac Allister,Brighton,M,Brighton vs Everton,C. Kavanagh,0.3285714285714285,3.75,0.26666666666666666,0.06190476190476185,SECONDARY,2026-01-31
