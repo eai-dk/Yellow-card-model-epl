@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Eagle AI Labs - Yellow Card Prediction Model</title>
+<style>
+body{font-family:'Segoe UI',Tahoma,sans-serif;max-width:850px;margin:0 auto;padding:40px;line-height:1.7;color:#1a1a1a;background:#fff}
+h1{color:#0d1b2a;font-size:24px;border-bottom:3px solid #1b4965;padding-bottom:15px}
+h2{color:#1b4965;font-size:18px;border-bottom:2px solid #bee9e8;padding-bottom:10px;margin-top:40px}
+h3{color:#2c5282;font-size:15px}
+table{border-collapse:collapse;width:100%;margin:20px 0;font-size:14px}
+th{background:linear-gradient(135deg,#1b4965,#2c5282);color:white;padding:12px 15px;text-align:left}
+td{border:1px solid #e2e8f0;padding:10px 15px}
+tr:nth-child(even){background:#f8fafc}
+hr{border:none;border-top:2px solid #bee9e8;margin:40px 0}
+ul,ol{padding-left:25px}
+li{margin-bottom:5px}
+code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:13px}
+.header{text-align:center;background:linear-gradient(135deg,#0d1b2a,#1b4965);color:white;padding:30px;border-radius:8px;margin-bottom:30px}
+.header h1{border:none;color:white;margin:0;font-size:28px}
+.header p{margin:10px 0 0 0;opacity:0.9}
+.highlight{background:#fef3c7;padding:15px;border-left:4px solid #f59e0b;margin:20px 0}
+.success{background:#d1fae5;padding:15px;border-left:4px solid #10b981;margin:20px 0}
+.formula{background:#f1f5f9;padding:15px;border-radius:8px;font-family:monospace;margin:15px 0}
+.footer{margin-top:50px;padding-top:20px;border-top:2px solid #1b4965;font-size:12px;color:#64748b;text-align:center}
+@media print{body{margin:0.5in}}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>🟨 EAGLE AI LABS</h1>
+<p>EPL Yellow Card Prediction Model — Technical Whitepaper</p>
+</div>
+<p><strong>Model Version:</strong> 2.0<br>
+<strong>Date:</strong> January 2026<br>
+<strong>Document:</strong> Technical Overview & Methodology</p>
+<hr>
+<h2>Executive Summary</h2>
+<p>Eagle AI has developed a <strong>rules-based yellow card prediction system</strong> for English Premier League matches that identifies value betting opportunities by comparing model probabilities against bookmaker odds.</p>
+<div class="success">
+<strong>Key Result:</strong> 43% hit rate on yellow card predictions (vs 10.4% baseline) with +160% ROI in backtesting.
+</div>
+<table>
+<thead><tr><th>Metric</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Historical Hit Rate</td><td><strong>43%</strong> (strategy picks)</td></tr>
+<tr><td>Baseline YC Rate</td><td>10.4% (all players)</td></tr>
+<tr><td>Backtested ROI</td><td>+160%</td></tr>
+<tr><td>Data Period</td><td>4 seasons (2021-2025)</td></tr>
+<tr><td>Sample Size</td><td>26,653 player-game records</td></tr>
+<tr><td>Edge Threshold</td><td>≥3% vs bookmaker odds</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>The Core Strategy</h2>
+<div class="formula">
+<strong>STRICT REFEREE + AWAY TEAM + DEFENDER/MIDFIELDER = 43% YC Rate</strong>
+</div>
+<p>Our analysis of 26,653 player-game records revealed three key factors that dramatically increase yellow card probability:</p>
+<h3>Factor 1: Referee Strictness</h3>
+<p>Referees show consistent patterns in card-giving behavior:</p>
+<table>
+<thead><tr><th>Referee Tier</th><th>Avg YC/Game</th><th>Examples</th></tr></thead>
+<tbody>
+<tr><td><strong>VERY STRICT</strong></td><td>5.0+</td><td>S. Allison (6.5), T. Robinson (5.2), C. Kavanagh (5.2)</td></tr>
+<tr><td><strong>STRICT</strong></td><td>4.0-4.9</td><td>M. Salisbury (4.9), J. Brooks (4.8), S. Attwell (4.7)</td></tr>
+<tr><td>Normal</td><td>&lt;4.0</td><td>Average referee</td></tr>
+</tbody>
+</table>
+<h3>Factor 2: Home/Away Status</h3>
+<table>
+<thead><tr><th>Status</th><th>YC Rate</th><th>Difference</th></tr></thead>
+<tbody>
+<tr><td>Away Players</td><td><strong>11.1%</strong></td><td>+14% higher</td></tr>
+<tr><td>Home Players</td><td>9.7%</td><td>baseline</td></tr>
+</tbody>
+</table>
+<h3>Factor 3: Position</h3>
+<table>
+<thead><tr><th>Position</th><th>YC Rate</th></tr></thead>
+<tbody>
+<tr><td><strong>Midfielders</strong></td><td><strong>13.0%</strong></td></tr>
+<tr><td><strong>Defenders</strong></td><td><strong>11.5%</strong></td></tr>
+<tr><td>Forwards</td><td>7.6%</td></tr>
+<tr><td>Goalkeepers</td><td>3.5%</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>Edge Calculation Methodology</h2>
+<p>The model calculates edge by comparing our probability estimate against bookmaker implied probability:</p>
+<div class="formula">
+<strong>Edge = Model Probability − Implied Probability</strong><br><br>
+Where: Implied Probability = 1 / Decimal Odds
+</div>
+<h3>Example Calculation</h3>
+<table>
+<thead><tr><th>Component</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Player</td><td>Kiernan Dewsbury-Hall (Everton)</td></tr>
+<tr><td>Historical YC Rate</td><td>36.7%</td></tr>
+<tr><td>Ref Adjustment (VERY STRICT)</td><td>×1.2 = 44.0%</td></tr>
+<tr><td>Bookmaker Odds</td><td>4.33</td></tr>
+<tr><td>Implied Probability</td><td>1/4.33 = 23.1%</td></tr>
+<tr><td><strong>Edge</strong></td><td><strong>44.0% − 23.1% = +20.9%</strong></td></tr>
+</tbody>
+</table>
+<div class="highlight">
+<strong>Value Threshold:</strong> We only recommend picks with edge ≥3%. This ensures meaningful expected value on every bet.
+</div>
+<hr>
+<h2>High-Card Opponents</h2>
+<p>Playing AGAINST certain teams increases yellow card probability by up to 23%:</p>
+<table>
+<thead><tr><th>Opponent</th><th>YC Increase</th></tr></thead>
+<tbody>
+<tr><td>Newcastle</td><td>+23%</td></tr>
+<tr><td>Aston Villa</td><td>+19%</td></tr>
+<tr><td>Chelsea</td><td>+17%</td></tr>
+<tr><td>Brighton</td><td>+17%</td></tr>
+<tr><td>Manchester City</td><td>+17%</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>Data Pipeline</h2>
+<p>The system integrates multiple data sources in real-time:</p>
+<table>
+<thead><tr><th>Data Source</th><th>Purpose</th><th>Update Frequency</th></tr></thead>
+<tbody>
+<tr><td><strong>API-Football</strong></td><td>Fixtures, referee assignments, lineups</td><td>Real-time</td></tr>
+<tr><td><strong>SportMonks</strong></td><td>Player booking odds (Market 64)</td><td>Real-time</td></tr>
+<tr><td><strong>Historical DB</strong></td><td>26,653 player-game records</td><td>Weekly update</td></tr>
+</tbody>
+</table>
+<h3>Processing Flow</h3>
+<ol>
+<li><strong>Fixture Detection</strong> — Fetch upcoming EPL matches with referee assignments</li>
+<li><strong>Referee Classification</strong> — Categorize as VERY STRICT, STRICT, or Normal</li>
+<li><strong>Player Selection</strong> — Filter to away team DEF/MID with ≥3 games history</li>
+<li><strong>Probability Calculation</strong> — Base rate × referee adjustment × opponent adjustment</li>
+<li><strong>Odds Matching</strong> — Match players to SportMonks booking odds</li>
+<li><strong>Edge Calculation</strong> — Model probability − implied probability</li>
+<li><strong>Value Filtering</strong> — Only output picks with edge ≥3%</li>
+</ol>
+<hr>
+<h2>Name Normalization System</h2>
+<p>A critical component for accurate odds matching across different data sources:</p>
+<table>
+<thead><tr><th>Challenge</th><th>Solution</th></tr></thead>
+<tbody>
+<tr><td>Referee formats differ</td><td><code>M. Oliver → Michael Oliver</code></td></tr>
+<tr><td>Team names differ</td><td><code>Brighton & Hove Albion → Brighton</code></td></tr>
+<tr><td>Player name variations</td><td><code>Kiernan Dewsbury-Hall → kiernan dewsbury hall</code></td></tr>
+<tr><td>Special characters</td><td><code>ø → o, ß → ss, ł → l</code></td></tr>
+</tbody>
+</table>
+<hr>
+<h2>API Specification</h2>
+<h3>Endpoint: GET /picks/weekend</h3>
+<p>Returns value picks for the upcoming weekend with edge calculation.</p>
+<div class="formula">
+<pre>{
+  "weekend_start": "2026-01-31",
+  "weekend_end": "2026-02-01",
+  "min_edge": 0.03,
+  "total_picks": 12,
+  "picks": [
+    {
+      "player_name": "Kiernan Dewsbury-Hall",
+      "team": "Everton",
+      "position": "M",
+      "fixture": "Brighton vs Everton",
+      "referee": "C. Kavanagh",
+      "probability": 0.44,
+      "odds": 4.33,
+      "implied_probability": 0.231,
+      "edge": 0.209,
+      "tier": "PRIMARY"
+    }
+  ]
+}</pre>
+</div>
+<p><strong>Note:</strong> All probabilities returned as decimals (0.44 = 44%) for dashboard compatibility.</p>
+<hr>
+<h2>Backtesting Results</h2>
+<h3>Strategy Performance (4 Seasons)</h3>
+<table>
+<thead><tr><th>Metric</th><th>All Players</th><th>Strategy Picks</th><th>Improvement</th></tr></thead>
+<tbody>
+<tr><td>YC Hit Rate</td><td>10.4%</td><td><strong>43%</strong></td><td>+314%</td></tr>
+<tr><td>Sample Size</td><td>26,653</td><td>~500/season</td><td>—</td></tr>
+<tr><td>Avg Odds</td><td>—</td><td>4.0 - 7.0</td><td>—</td></tr>
+<tr><td>ROI (backtested)</td><td>—</td><td><strong>+160%</strong></td><td>—</td></tr>
+</tbody>
+</table>
+<h3>January 2026 Live Test</h3>
+<table>
+<thead><tr><th>Date</th><th>Picks</th><th>Hits</th><th>Hit Rate</th></tr></thead>
+<tbody>
+<tr><td>Jan 17-18</td><td>8</td><td>4</td><td>50%</td></tr>
+<tr><td>Jan 24-25</td><td>10</td><td>4</td><td>40%</td></tr>
+<tr><td>Jan 31-Feb 1</td><td>12</td><td>TBD</td><td>TBD</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>Risk Factors</h2>
+<table>
+<thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>Referee assignment changes</td><td>Re-run model 24h before kickoff</td></tr>
+<tr><td>Player not starting</td><td>Check lineups 1h before kickoff</td></tr>
+<tr><td>Odds movement</td><td>Real-time odds refresh</td></tr>
+<tr><td>New/transferred players</td><td>Require minimum 3 games history</td></tr>
+<tr><td>Variance</td><td>Bankroll management (1-2% per pick)</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>Technical Stack</h2>
+<table>
+<thead><tr><th>Component</th><th>Technology</th></tr></thead>
+<tbody>
+<tr><td>API Framework</td><td>FastAPI (Python)</td></tr>
+<tr><td>Data Processing</td><td>Pandas</td></tr>
+<tr><td>Deployment</td><td>Render.com</td></tr>
+<tr><td>Odds Source</td><td>SportMonks API (Market 64)</td></tr>
+<tr><td>Fixtures Source</td><td>API-Football</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>Conclusion</h2>
+<p>The Yellow Card model demonstrates that <strong>referee behavior is predictable</strong> and creates exploitable inefficiencies in betting markets. By focusing on:</p>
+<ul>
+<li>Strict referees (4+ YC/game average)</li>
+<li>Away team players (11.1% vs 9.7% YC rate)</li>
+<li>Defenders and midfielders (11-13% YC rate)</li>
+<li>Edge threshold of ≥3%</li>
+</ul>
+<p>We achieve a <strong>43% hit rate</strong> on a market where the baseline is just 10.4%, generating consistent positive expected value.</p>
+<div class="success">
+<strong>Bottom Line:</strong> The model identifies 10-15 value picks per weekend with average edge of +10%, targeting odds of 3.0-7.5.
+</div>
+<hr>
+<p><strong>Contact:</strong> Eagle AI Labs<br>
+<strong>Repository:</strong> github.com/EagleAIbot/Yellow-card-model-epl</p>
+<div class="footer">
+<p>Eagle AI Labs | Yellow Card Prediction Model v2.0 | January 2026</p>
+</div>
+</body>
+</html>
+
