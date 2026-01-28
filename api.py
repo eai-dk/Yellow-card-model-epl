@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-
 app = FastAPI(
     title="Yellow Card Model API",
     description="EPL Yellow Card predictions with edge calculation",
@@ -51,49 +50,84 @@ def health():
 @app.get("/picks/weekend")
 async def weekend_picks(days_ahead: int = 7):
     """Get weekend value picks from Supabase"""
-    if not SUPABASE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase key not configured")
+    today = datetime.now().strftime("%Y-%m-%d")
+    end_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
     
-    today = datetime.utcnow().date()
-    end_date = today + timedelta(days=days_ahead)
-    
-    url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
-    params = {
-        "select": "*",
-        "date": f"gte.{today.isoformat()}",
-        "date": f"lte.{end_date.isoformat()}",
-        "order": "edge.desc"
-    }
+    # Read from Supabase
+    supabase_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
+    params = f"?fixture_date=gte.{today}&fixture_date=lte.{end_date}&order=edge.desc"
     
     try:
-        resp = requests.get(url, headers=get_supabase_headers(), params=params, timeout=30)
+        resp = requests.get(
+            supabase_url + params,
+            headers=get_supabase_headers(),
+            timeout=10
+        )
+        
         if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=f"Supabase error: {resp.text}")
+            raise HTTPException(status_code=500, detail=f"Supabase error: {resp.text}")
         
         predictions = resp.json()
         
-        # Format response
+        # Format for frontend
         picks = []
         for pred in predictions:
             picks.append({
-                "player_name": pred.get("player", ""),
-                "team": pred.get("team", ""),
-                "position": pred.get("pos", ""),
-                "fixture": pred.get("game", ""),
-                "probability": pred.get("model_prob", 0),
-                "odds": pred.get("odds", 0),
-                "implied_probability": pred.get("implied_prob", 0),
-                "edge": pred.get("edge", 0),
-                "tier": pred.get("tier", ""),
-                "fixture_date": pred.get("date", "")
+                "player_name": pred.get("player_name"),
+                "team": pred.get("team"),
+                "position": pred.get("position"),
+                "fixture": pred.get("fixture"),
+                "referee": pred.get("referee"),
+                "probability": float(pred.get("model_probability", 0)),
+                "odds": float(pred.get("odds", 0)) if pred.get("odds") else None,
+                "implied_probability": float(pred.get("implied_probability", 0)) if pred.get("implied_probability") else None,
+                "edge": float(pred.get("edge", 0)) if pred.get("edge") else None,
+                "tier": pred.get("tier"),
+                "fixture_date": pred.get("fixture_date"),
             })
         
         return {
             "model": "yellow-card",
             "total_picks": len(picks),
-            "picks": picks
+            "picks": picks,
+            "strategy": "STRICT REF + AWAY DEF/MID = 43% hit rate",
+            "generated_at": predictions[0].get("generated_at") if predictions else None
         }
+        
     except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="Supabase request timed out")
+        raise HTTPException(status_code=504, detail="Database timeout")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/predictions/{date}")
+def predictions(date: str):
+    """Get predictions for a specific date"""
+    supabase_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
+    params = f"?fixture_date=eq.{date}&order=edge.desc"
+    
+    try:
+        resp = requests.get(
+            supabase_url + params,
+            headers=get_supabase_headers(),
+            timeout=10
+        )
+        
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Supabase error: {resp.text}")
+        
+        predictions = resp.json()
+        
+        return {
+            "date": date,
+            "total_picks": len(predictions),
+            "picks": predictions,
+            "strategy": "STRICT REF + AWAY DEF/MID = 43% hit rate"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 5000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
