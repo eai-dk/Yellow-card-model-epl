@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: yellow-card-model
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: API_FOOTBALL_KEY
+        value: 0b8d12ae574703056b109de918c240ef
+      - key: SPORTMONKS_TOKEN
+        value: fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef
+
