@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-🔥 Yellow Card Weekend Picks with Edge Calculation 🔥
+Yellow Card Weekend Picks with Edge Calculation
 Fetches real odds from SportMonks Market 64 (Player to be booked)
 Only shows VALUE picks where edge > threshold
 """
 
+import os
 import requests
 import pandas as pd
 import unicodedata
@@ -12,9 +13,9 @@ import sys
 from datetime import datetime, timedelta
 from config import VERY_STRICT_REFS, STRICT_REFS, HIGH_CARD_OPPONENTS
 
-# API Keys
-API_FOOTBALL_KEY = "0b8d12ae574703056b109de918c240ef"
-SPORTMONKS_TOKEN = "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef"
+# API Keys - use env vars if available, fallback to hardcoded
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
+SPORTMONKS_TOKEN = os.environ.get("SPORTMONKS_TOKEN", "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef")
 
 # Edge threshold (only show picks with edge > this)
 MIN_EDGE = 0.03  # 3%
@@ -44,9 +45,9 @@ def normalize_player_name(name: str) -> str:
     if not name or not isinstance(name, str):
         return ""
     special_chars = {
-        'ø': 'o', 'Ø': 'O', 'ß': 'ss', 'ı': 'i', 'İ': 'I',
-        'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D',
-        'æ': 'ae', 'Æ': 'AE', 'œ': 'oe', 'Œ': 'OE',
+        '\u00f8': 'o', '\u00d8': 'O', '\u00df': 'ss', '\u0131': 'i', '\u0130': 'I',
+        '\u0142': 'l', '\u0141': 'L', '\u0111': 'd', '\u0110': 'D',
+        '\u00e6': 'ae', '\u00c6': 'AE', '\u0153': 'oe', '\u0152': 'OE',
     }
     for char, replacement in special_chars.items():
         name = name.replace(char, replacement)
@@ -110,9 +111,7 @@ def get_ref_tier(ref_name: str) -> int:
     """0=normal, 1=very strict, 2=strict"""
     if not ref_name or ref_name == "TBD":
         return 0
-
     ref_norm = normalize_ref_name(ref_name)
-
     for ref in VERY_STRICT_REFS:
         if ref.lower() in ref_norm or ref_norm in ref.lower():
             return 1
@@ -143,70 +142,123 @@ def get_sportmonks_yc_odds(start_date: str, end_date: str) -> dict:
     }
     resp = requests.get(url, params=params)
     data = resp.json()
-
-    player_odds = {}  # {canonical_name: {'odds': X, 'original_name': Y}}
-
+    player_odds = {}
     for fixture in data.get('data', []):
         for odd in fixture.get('odds', []):
-            if odd.get('market_id') == 64:  # Player to be booked
+            if odd.get('market_id') == 64:
                 player_name = odd.get('name')
                 odds_value = odd.get('value')
                 if player_name and odds_value:
-                    # Use canonical name for better matching
                     canonical = get_canonical_name(player_name)
                     player_odds[canonical] = {
                         'odds': float(odds_value),
                         'original_name': player_name,
                         'implied_prob': 1 / float(odds_value)
                     }
-
     return player_odds
+
+def upload_to_supabase(all_picks: list):
+    """Upload predictions to Supabase database"""
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+    
+    if not SUPABASE_KEY:
+        print("   SUPABASE_KEY not set, skipping upload")
+        return
+    
+    if not all_picks:
+        print("   No picks to upload")
+        return
+    
+    print("\n8. Uploading predictions to Supabase...")
+    
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    
+    # Clear old predictions for these dates
+    dates_to_clear = list(set([p['date'] for p in all_picks]))
+    for date_str in dates_to_clear:
+        delete_url = f"{SUPABASE_URL}/rest/v1/yc_predictions?fixture_date=eq.{date_str}"
+        requests.delete(delete_url, headers=headers)
+    
+    print(f"   Cleared old predictions for {dates_to_clear}")
+    
+    # Prepare records for upload
+    records = []
+    generated_at = datetime.utcnow().isoformat()
+    
+    for pick in all_picks:
+        records.append({
+            "fixture_date": pick['date'],
+            "player_name": pick['player'],
+            "team": pick['team'],
+            "position": pick['pos'],
+            "fixture": pick['game'],
+            "referee": pick['ref'],
+            "model_probability": round(pick['model_prob'], 4),
+            "odds": round(pick['odds'], 2) if pick.get('odds') else None,
+            "implied_probability": round(pick['implied_prob'], 4) if pick.get('implied_prob') else None,
+            "edge": round(pick['edge'], 4) if pick.get('edge') else None,
+            "tier": pick['tier'],
+            "generated_at": generated_at
+        })
+    
+    # Upload in batches
+    batch_size = 50
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i+batch_size]
+        insert_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
+        resp = requests.post(insert_url, headers=headers, json=batch)
+        if resp.status_code in [200, 201]:
+            print(f"   Uploaded batch {i//batch_size + 1}: {len(batch)} records")
+        else:
+            print(f"   Error uploading batch: {resp.text[:200]}")
+    
+    print(f"   Uploaded {len(records)} predictions to Supabase")
 
 def run_weekend_picks():
     """Generate value picks with edge calculation"""
     today = datetime.now()
-    
-    # Get fixtures for Saturday and Sunday
     saturday = today + timedelta(days=(5 - today.weekday()) % 7)
     sunday = saturday + timedelta(days=1)
-    
+
     print("=" * 80)
-    print(f"🔥 YELLOW CARD VALUE PICKS - Weekend of {saturday.strftime('%Y-%m-%d')}")
+    print(f"YELLOW CARD VALUE PICKS - Weekend of {saturday.strftime('%Y-%m-%d')}")
     print("=" * 80)
-    
-    # Load data
+
     historical = load_historical_data()
-    
-    # Fetch odds
-    print("\n📊 Fetching bookmaker odds from SportMonks...")
+
+    print("\nFetching bookmaker odds from SportMonks...")
     yc_odds = get_sportmonks_yc_odds(saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d'))
     print(f"   Found {len(yc_odds)} player booking odds")
-    
+
     all_picks = []
-    
+
     for date_str in [saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')]:
         fixtures = get_fixtures(date_str)
-        
+
         for fix in fixtures:
             home_raw = fix["teams"]["home"]["name"]
             away_raw = fix["teams"]["away"]["name"]
-            home = normalize_team(home_raw)  # Convert to our data format
+            home = normalize_team(home_raw)
             away = normalize_team(away_raw)
-            time = fix["fixture"]["date"][11:16]
             ref = fix["fixture"].get("referee", "TBD")
             ref_name = ref.split(",")[0].strip() if ref else "TBD"
             tier = get_ref_tier(ref_name)
 
             if tier == 0:
-                continue  # Skip non-strict refs
+                continue
 
             very_strict = tier == 1
             vs_high_card = home in HIGH_CARD_OPPONENTS
 
-            # Get away DEF/MID picks (primary)
             away_data = historical[historical["team"] == away]
             away_defmid = away_data[away_data["position"].isin(["D", "M"])]
-            
+
             if len(away_defmid) > 0:
                 players = away_defmid.groupby("player_name").agg({
                     "yellow_card": ["mean", "count"],
@@ -214,21 +266,19 @@ def run_weekend_picks():
                 }).reset_index()
                 players.columns = ["name", "yc_rate", "games", "pos"]
                 players = players[players["games"] >= 3]
-                
+
                 for _, p in players.iterrows():
-                    # Adjust rate for ref strictness
                     adj_rate = min(p['yc_rate'] * 1.2, 0.55) if very_strict else p['yc_rate']
                     if vs_high_card:
                         adj_rate = min(adj_rate * 1.1, 0.55)
 
-                    # Match to odds using canonical name
                     canonical = get_canonical_name(p['name'])
                     odds_data = yc_odds.get(canonical)
-                    
+
                     if odds_data:
                         implied = odds_data['implied_prob']
                         edge = adj_rate - implied
-                        
+
                         if edge >= MIN_EDGE:
                             all_picks.append({
                                 'player': p['name'],
@@ -244,7 +294,6 @@ def run_weekend_picks():
                                 'date': date_str
                             })
 
-            # Secondary: Home DEF/MID only if VERY STRICT or vs high-card away
             away_is_high_card = away in HIGH_CARD_OPPONENTS
             if very_strict or away_is_high_card:
                 home_data = historical[historical["team"] == home]
@@ -283,15 +332,14 @@ def run_weekend_picks():
                                     'date': date_str
                                 })
 
-    # Sort by edge and display
     all_picks.sort(key=lambda x: x['edge'], reverse=True)
 
     print("\n" + "=" * 80)
-    print(f"🔥 VALUE PICKS (Edge > {MIN_EDGE*100:.0f}%)")
+    print(f"VALUE PICKS (Edge > {MIN_EDGE*100:.0f}%)")
     print("=" * 80)
 
     if not all_picks:
-        print("\n❌ No value picks found. Either:")
+        print("\nNo value picks found. Either:")
         print("   - No strict ref games this weekend")
         print("   - Odds not available yet (check 24-48 hrs before kickoff)")
         print("   - No edge vs bookmaker prices")
@@ -300,93 +348,25 @@ def run_weekend_picks():
             edge_pct = pick['edge'] * 100
             prob_pct = pick['model_prob'] * 100
             implied_pct = pick['implied_prob'] * 100
-            tier_icon = "💰" if pick['tier'] == 'PRIMARY' else "⚡"
+            tier_icon = "PRIMARY" if pick['tier'] == 'PRIMARY' else "SECONDARY"
 
-            print(f"\n{tier_icon} {pick['player']} ({pick['team']}) - {pick['pos']}")
+            print(f"\n{tier_icon}: {pick['player']} ({pick['team']}) - {pick['pos']}")
             print(f"   Game: {pick['game']} | Ref: {pick['ref']}")
             print(f"   Model: {prob_pct:.1f}% | Odds: {pick['odds']} (implied {implied_pct:.1f}%)")
-            print(f"   🎯 EDGE: +{edge_pct:.1f}%")
+            print(f"   EDGE: +{edge_pct:.1f}%")
 
-    # Save to CSV
     if all_picks:
         df = pd.DataFrame(all_picks)
         df.to_csv("weekend_yc_picks.csv", index=False)
-        print(f"\n✅ Saved {len(all_picks)} picks to weekend_yc_picks.csv")
+        print(f"\nSaved {len(all_picks)} picks to weekend_yc_picks.csv")
 
     print("\n" + "=" * 80)
-    print(f"📊 SUMMARY: {len(all_picks)} value picks with edge > {MIN_EDGE*100:.0f}%")
-    print(f"💡 Strategy: STRICT REF + AWAY DEF/MID = 43% hit rate")
+    print(f"SUMMARY: {len(all_picks)} value picks with edge > {MIN_EDGE*100:.0f}%")
+    print(f"Strategy: STRICT REF + AWAY DEF/MID = 43% hit rate")
     print("=" * 80)
 
     return all_picks
 
 if __name__ == "__main__":
-    run_weekend_picks()
-
-
-
-# ===========================================================================
-# SUPABASE UPLOAD
-# ===========================================================================
-import os
-
-print("\n8. Uploading predictions to Supabase...")
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-
-if SUPABASE_KEY and all_picks:
-    import requests as http_req
-    
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
-    }
-    
-    # Clear old predictions for these dates
-    dates_to_clear = list(set([p['date'] for p in all_picks]))
-    for date_str in dates_to_clear:
-        delete_url = f"{SUPABASE_URL}/rest/v1/yc_predictions?fixture_date=eq.{date_str}"
-        http_req.delete(delete_url, headers=headers)
-    
-    print(f"   Cleared old predictions for {dates_to_clear}")
-    
-    # Prepare records for upload
-    records = []
-    generated_at = datetime.utcnow().isoformat()
-    
-    for pick in all_picks:
-        records.append({
-            "fixture_date": pick['date'],
-            "player_name": pick['player'],
-            "team": pick['team'],
-            "position": pick['pos'],
-            "fixture": pick['game'],
-            "referee": pick['ref'],
-            "model_probability": round(pick['model_prob'], 4),
-            "odds": round(pick['odds'], 2) if pick.get('odds') else None,
-            "implied_probability": round(pick['implied_prob'], 4) if pick.get('implied_prob') else None,
-            "edge": round(pick['edge'], 4) if pick.get('edge') else None,
-            "tier": pick['tier'],
-            "generated_at": generated_at
-        })
-    
-    # Upload in batches
-    batch_size = 50
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i+batch_size]
-        insert_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
-        resp = http_req.post(insert_url, headers=headers, json=batch)
-        if resp.status_code in [200, 201]:
-            print(f"   Uploaded batch {i//batch_size + 1}: {len(batch)} records")
-        else:
-            print(f"   Error uploading batch: {resp.text[:200]}")
-    
-    print(f"    Uploaded {len(records)} predictions to Supabase")
-else:
-    if not SUPABASE_KEY:
-        print("    SUPABASE_KEY not set, skipping upload")
-    else:
-        print("    No picks to upload")
+    picks = run_weekend_picks()
+    upload_to_supabase(picks)
