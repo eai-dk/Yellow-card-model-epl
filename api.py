@@ -9,6 +9,10 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+# Import squad validator for 25/26 squad data
+from squad_validator import validate_predictions
+
+
 app = FastAPI(
     title="Yellow Card Model API",
     description="EPL Yellow Card predictions with edge calculation",
@@ -68,6 +72,9 @@ async def weekend_picks(days_ahead: int = 7):
             raise HTTPException(status_code=500, detail=f"Supabase error: {resp.text}")
         
         predictions = resp.json()
+
+        # Validate predictions against current 25/26 squad data
+        predictions = validate_predictions(predictions)
         
         # Format for frontend
         picks = []
