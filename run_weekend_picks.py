@@ -323,3 +323,70 @@ def run_weekend_picks():
 if __name__ == "__main__":
     run_weekend_picks()
 
+
+
+# ===========================================================================
+# SUPABASE UPLOAD
+# ===========================================================================
+import os
+
+print("\n8. Uploading predictions to Supabase...")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+if SUPABASE_KEY and all_picks:
+    import requests as http_req
+    
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    
+    # Clear old predictions for these dates
+    dates_to_clear = list(set([p['date'] for p in all_picks]))
+    for date_str in dates_to_clear:
+        delete_url = f"{SUPABASE_URL}/rest/v1/yc_predictions?fixture_date=eq.{date_str}"
+        http_req.delete(delete_url, headers=headers)
+    
+    print(f"   Cleared old predictions for {dates_to_clear}")
+    
+    # Prepare records for upload
+    records = []
+    generated_at = datetime.utcnow().isoformat()
+    
+    for pick in all_picks:
+        records.append({
+            "fixture_date": pick['date'],
+            "player_name": pick['player'],
+            "team": pick['team'],
+            "position": pick['pos'],
+            "fixture": pick['game'],
+            "referee": pick['ref'],
+            "model_probability": round(pick['model_prob'], 4),
+            "odds": round(pick['odds'], 2) if pick.get('odds') else None,
+            "implied_probability": round(pick['implied_prob'], 4) if pick.get('implied_prob') else None,
+            "edge": round(pick['edge'], 4) if pick.get('edge') else None,
+            "tier": pick['tier'],
+            "generated_at": generated_at
+        })
+    
+    # Upload in batches
+    batch_size = 50
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i+batch_size]
+        insert_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
+        resp = http_req.post(insert_url, headers=headers, json=batch)
+        if resp.status_code in [200, 201]:
+            print(f"   Uploaded batch {i//batch_size + 1}: {len(batch)} records")
+        else:
+            print(f"   Error uploading batch: {resp.text[:200]}")
+    
+    print(f"    Uploaded {len(records)} predictions to Supabase")
+else:
+    if not SUPABASE_KEY:
+        print("    SUPABASE_KEY not set, skipping upload")
+    else:
+        print("    No picks to upload")
