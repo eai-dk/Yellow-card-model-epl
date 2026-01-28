@@ -17,7 +17,7 @@ API_FOOTBALL_KEY = "0b8d12ae574703056b109de918c240ef"
 SPORTMONKS_TOKEN = "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef"
 
 # Edge threshold (only show picks with edge > this)
-MIN_EDGE = 0.05  # 5%
+MIN_EDGE = 0.03  # 3%
 
 # Player name mapping for edge cases (our data -> SportMonks)
 PLAYER_NAME_MAPPING = {

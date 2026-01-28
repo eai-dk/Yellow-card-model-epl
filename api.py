@@ -30,7 +30,7 @@ app = FastAPI(
 API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '0b8d12ae574703056b109de918c240ef')
 SPORTMONKS_TOKEN = os.environ.get('SPORTMONKS_TOKEN', 'fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef')
 DATA_PATH = os.environ.get('DATA_PATH', 'data/complete_yc_data.csv')
-MIN_EDGE = 0.05  # 5% minimum edge
+MIN_EDGE = 0.03  # 3% minimum edge
 
 # Referee strictness ratings (YC per game)
 VERY_STRICT_REFS = ['S. Allison', 'Tim Robinson', 'C. Kavanagh', 'Chris Kavanagh', 'T. Robinson', 'S. Barrott', 'Samuel Barrott']
