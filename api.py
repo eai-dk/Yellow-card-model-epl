@@ -110,12 +110,15 @@ def health():
 
 @app.get("/picks/weekend")
 async def weekend_picks(days_ahead: int = 7):
-    """Get weekend value picks from Supabase with squad validation"""
+    """
+    Get pre-computed YC picks from Supabase computed_yc_picks table.
+    This is FAST (~50ms) because picks are pre-computed by a cron job.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
     end_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-    supabase_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
-    params = f"?fixture_date=gte.{today}&fixture_date=lte.{end_date}&order=edge.desc"
+    supabase_url = f"{SUPABASE_URL}/rest/v1/computed_yc_picks"
+    params = f"?fixture_date=gte.{today}&fixture_date=lte.{end_date}&order=prob.desc"
 
     try:
         resp = requests.get(supabase_url + params, headers=get_supabase_headers(), timeout=10)
@@ -123,27 +126,27 @@ async def weekend_picks(days_ahead: int = 7):
         if resp.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Supabase error: {resp.text}")
 
-        predictions = resp.json()
-        picks = []
+        picks = resp.json()
         filtered_count = 0
+        valid_picks = []
 
-        for pred in predictions:
+        for pred in picks:
             player_name = pred.get("player_name")
             team = pred.get("team")
-            
+
             if not is_player_in_current_squad(player_name, team):
                 filtered_count += 1
                 continue
-            
-            picks.append({
+
+            valid_picks.append({
                 "player_name": player_name,
                 "team": team,
                 "position": pred.get("position"),
                 "fixture": pred.get("fixture"),
                 "referee": pred.get("referee"),
-                "probability": float(pred.get("model_probability", 0)),
+                "probability": float(pred.get("prob", 0)),
                 "odds": float(pred.get("odds", 0)) if pred.get("odds") else None,
-                "implied_probability": float(pred.get("implied_probability", 0)) if pred.get("implied_probability") else None,
+                "implied_probability": float(pred.get("implied", 0)) if pred.get("implied") else None,
                 "edge": float(pred.get("edge", 0)) if pred.get("edge") else None,
                 "tier": pred.get("tier"),
                 "fixture_date": pred.get("fixture_date"),
@@ -151,11 +154,12 @@ async def weekend_picks(days_ahead: int = 7):
 
         return {
             "model": "yellow-card",
-            "total_picks": len(picks),
-            "picks": picks,
+            "total_picks": len(valid_picks),
+            "picks": valid_picks,
             "filtered_transfers": filtered_count,
             "strategy": "STRICT REF + AWAY DEF/MID = 43% hit rate",
-            "generated_at": predictions[0].get("generated_at") if predictions else None
+            "generated_at": picks[0].get("computed_at") if picks else None,
+            "source": "computed_yc_picks"
         }
 
     except requests.exceptions.Timeout:
@@ -163,7 +167,3 @@ async def weekend_picks(days_ahead: int = 7):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 5000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
