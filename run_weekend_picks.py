@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """
 Yellow Card Weekend Picks with Edge Calculation
-Fetches real odds from SportMonks Market 64 (Player to be booked)
-Only shows VALUE picks where edge > threshold
+Uses shared_features.FeatureEngine for Supabase-backed feature engineering
+and the YC v5 CalibratedClassifierCV model for probability estimation.
+Fetches real odds from SportMonks Market 64 (Player to be booked).
+Only shows VALUE picks where edge > threshold.
 """
 
 import os
+import sys
+import pickle
 import requests
+import numpy as np
 import pandas as pd
 import unicodedata
-import sys
 from datetime import datetime, timedelta
-from config import VERY_STRICT_REFS, STRICT_REFS, HIGH_CARD_OPPONENTS
+
+# Add parent directory to path for shared_features
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shared_features import FeatureEngine
+from shared_features.constants import YC_V5_FEATURES
 
 # API Keys - use env vars if available, fallback to hardcoded
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
@@ -82,46 +90,7 @@ def normalize_team(name: str) -> str:
     """Normalize team name to match our historical data"""
     return TEAM_MAPPING.get(name, name)
 
-# Referee name mapping (API format -> config format)
-REF_NAME_MAPPING = {
-    "m. oliver": "michael oliver",
-    "s. attwell": "stuart attwell",
-    "a. taylor": "anthony taylor",
-    "m. salisbury": "michael salisbury",
-    "j. brooks": "john brooks",
-    "s. allison": "simon allison",
-    "c. kavanagh": "chris kavanagh",
-    "t. robinson": "tim robinson",
-    "s. barrott": "samuel barrott",
-    "t. bramall": "thomas bramall",
-    "d. bond": "darren bond",
-    "a. madley": "andy madley",
-    "r. jones": "robert jones",
-    "j. gillett": "jarred gillett",
-}
 
-def normalize_ref_name(ref_name: str) -> str:
-    """Normalize referee name"""
-    if not ref_name:
-        return ""
-    ref_lower = ref_name.lower().strip()
-    return REF_NAME_MAPPING.get(ref_lower, ref_lower)
-
-def get_ref_tier(ref_name: str) -> int:
-    """0=normal, 1=very strict, 2=strict"""
-    if not ref_name or ref_name == "TBD":
-        return 0
-    ref_norm = normalize_ref_name(ref_name)
-    for ref in VERY_STRICT_REFS:
-        if ref.lower() in ref_norm or ref_norm in ref.lower():
-            return 1
-    for ref in STRICT_REFS:
-        if ref.lower() in ref_norm or ref_norm in ref.lower():
-            return 2
-    return 0
-
-def load_historical_data() -> pd.DataFrame:
-    return pd.read_csv("data/complete_yc_data.csv")
 
 def get_fixtures(date_str: str) -> list:
     """Fetch EPL fixtures from API-Football"""
@@ -160,7 +129,7 @@ def get_sportmonks_yc_odds(start_date: str, end_date: str) -> dict:
 def upload_to_supabase(all_picks: list):
     """Upload predictions to Supabase database"""
     SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_secret_8qWDEuaM0lh95i_CwBgl8A_MgxI1vQK")
     
     if not SUPABASE_KEY:
         print("   SUPABASE_KEY not set, skipping upload")
@@ -221,17 +190,26 @@ def upload_to_supabase(all_picks: list):
     print(f"   Uploaded {len(records)} predictions to Supabase")
 
 def run_weekend_picks():
-    """Generate value picks with edge calculation"""
+    """Generate value picks using YC v5 ML model + Supabase features"""
     today = datetime.now()
     saturday = today + timedelta(days=(5 - today.weekday()) % 7)
     sunday = saturday + timedelta(days=1)
 
     print("=" * 80)
-    print(f"YELLOW CARD VALUE PICKS - Weekend of {saturday.strftime('%Y-%m-%d')}")
+    print(f"YELLOW CARD VALUE PICKS (v5 ML) - Weekend of {saturday.strftime('%Y-%m-%d')}")
     print("=" * 80)
 
-    historical = load_historical_data()
+    # Load YC v5 model
+    model_path = os.path.join(os.path.dirname(__file__), "epl_yellow_cards_v5.pkl")
+    with open(model_path, "rb") as f:
+        model_data = pickle.load(f)
+    model = model_data["model"]
+    print(f"   Loaded YC v5 model ({len(YC_V5_FEATURES)} features, no scaler)")
 
+    # Initialize shared feature engine (pulls from Supabase)
+    engine = FeatureEngine()
+
+    # Fetch odds
     print("\nFetching bookmaker odds from SportMonks...")
     yc_odds = get_sportmonks_yc_odds(saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d'))
     print(f"   Found {len(yc_odds)} player booking odds")
@@ -240,6 +218,7 @@ def run_weekend_picks():
 
     for date_str in [saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')]:
         fixtures = get_fixtures(date_str)
+        print(f"\n   {date_str}: {len(fixtures)} fixtures")
 
         for fix in fixtures:
             home_raw = fix["teams"]["home"]["name"]
@@ -248,89 +227,56 @@ def run_weekend_picks():
             away = normalize_team(away_raw)
             ref = fix["fixture"].get("referee", "TBD")
             ref_name = ref.split(",")[0].strip() if ref else "TBD"
-            tier = get_ref_tier(ref_name)
 
-            if tier == 0:
-                continue
+            print(f"\n   {home} vs {away} (Ref: {ref_name})")
 
-            very_strict = tier == 1
-            vs_high_card = home in HIGH_CARD_OPPONENTS
+            # Process both teams — FeatureEngine handles referee strictness internally
+            for team, opponent, is_home in [(home, away, True), (away, home, False)]:
+                try:
+                    player_features_list = engine.get_fixture_player_features(
+                        model='yc_v5',
+                        team=team,
+                        opponent=opponent,
+                        is_home=is_home,
+                        match_date=date_str,
+                        referee=ref_name,
+                        min_games=3,
+                    )
+                except Exception as e:
+                    print(f"      ⚠️ Error getting features for {team}: {e}")
+                    continue
 
-            away_data = historical[historical["team"] == away]
-            away_defmid = away_data[away_data["position"].isin(["D", "M"])]
+                for pf in player_features_list:
+                    player_name = pf.pop("_player_name", "Unknown")
+                    position = pf.pop("_position", "M")
+                    pf.pop("_player_id", None)
 
-            if len(away_defmid) > 0:
-                players = away_defmid.groupby("player_name").agg({
-                    "yellow_card": ["mean", "count"],
-                    "position": "first"
-                }).reset_index()
-                players.columns = ["name", "yc_rate", "games", "pos"]
-                players = players[players["games"] >= 3]
+                    # Build feature array and predict
+                    X = np.array([[pf[f] for f in YC_V5_FEATURES]])
+                    prob = model.predict_proba(X)[0][1]
 
-                for _, p in players.iterrows():
-                    adj_rate = min(p['yc_rate'] * 1.2, 0.55) if very_strict else p['yc_rate']
-                    if vs_high_card:
-                        adj_rate = min(adj_rate * 1.1, 0.55)
-
-                    canonical = get_canonical_name(p['name'])
+                    # Match to odds
+                    canonical = get_canonical_name(player_name)
                     odds_data = yc_odds.get(canonical)
 
                     if odds_data:
                         implied = odds_data['implied_prob']
-                        edge = adj_rate - implied
+                        edge = prob - implied
 
                         if edge >= MIN_EDGE:
                             all_picks.append({
-                                'player': p['name'],
-                                'team': away,
-                                'pos': p['pos'],
+                                'player': player_name,
+                                'team': team,
+                                'pos': position[0] if position else '?',
                                 'game': f"{home} vs {away}",
                                 'ref': ref_name,
-                                'model_prob': adj_rate,
+                                'model_prob': prob,
                                 'odds': odds_data['odds'],
                                 'implied_prob': implied,
                                 'edge': edge,
-                                'tier': 'PRIMARY',
-                                'date': date_str
+                                'tier': 'ML_VALUE',
+                                'date': date_str,
                             })
-
-            away_is_high_card = away in HIGH_CARD_OPPONENTS
-            if very_strict or away_is_high_card:
-                home_data = historical[historical["team"] == home]
-                home_defmid = home_data[home_data["position"].isin(["D", "M"])]
-
-                if len(home_defmid) > 0:
-                    players = home_defmid.groupby("player_name").agg({
-                        "yellow_card": ["mean", "count"],
-                        "position": "first"
-                    }).reset_index()
-                    players.columns = ["name", "yc_rate", "games", "pos"]
-                    players = players[players["games"] >= 3]
-
-                    for _, p in players.iterrows():
-                        adj_rate = min(p['yc_rate'] * 1.15, 0.50) if very_strict else p['yc_rate']
-
-                        canonical = get_canonical_name(p['name'])
-                        odds_data = yc_odds.get(canonical)
-
-                        if odds_data:
-                            implied = odds_data['implied_prob']
-                            edge = adj_rate - implied
-
-                            if edge >= MIN_EDGE:
-                                all_picks.append({
-                                    'player': p['name'],
-                                    'team': home,
-                                    'pos': p['pos'],
-                                    'game': f"{home} vs {away}",
-                                    'ref': ref_name,
-                                    'model_prob': adj_rate,
-                                    'odds': odds_data['odds'],
-                                    'implied_prob': implied,
-                                    'edge': edge,
-                                    'tier': 'SECONDARY',
-                                    'date': date_str
-                                })
 
     all_picks.sort(key=lambda x: x['edge'], reverse=True)
 
@@ -340,17 +286,16 @@ def run_weekend_picks():
 
     if not all_picks:
         print("\nNo value picks found. Either:")
-        print("   - No strict ref games this weekend")
         print("   - Odds not available yet (check 24-48 hrs before kickoff)")
         print("   - No edge vs bookmaker prices")
+        print("   - Players not in Supabase yet")
     else:
         for pick in all_picks:
             edge_pct = pick['edge'] * 100
             prob_pct = pick['model_prob'] * 100
             implied_pct = pick['implied_prob'] * 100
-            tier_icon = "PRIMARY" if pick['tier'] == 'PRIMARY' else "SECONDARY"
 
-            print(f"\n{tier_icon}: {pick['player']} ({pick['team']}) - {pick['pos']}")
+            print(f"\n   {pick['player']} ({pick['team']}) - {pick['pos']}")
             print(f"   Game: {pick['game']} | Ref: {pick['ref']}")
             print(f"   Model: {prob_pct:.1f}% | Odds: {pick['odds']} (implied {implied_pct:.1f}%)")
             print(f"   EDGE: +{edge_pct:.1f}%")
@@ -362,7 +307,7 @@ def run_weekend_picks():
 
     print("\n" + "=" * 80)
     print(f"SUMMARY: {len(all_picks)} value picks with edge > {MIN_EDGE*100:.0f}%")
-    print(f"Strategy: STRICT REF + AWAY DEF/MID = 43% hit rate")
+    print(f"Strategy: YC v5 ML model + Supabase features + SportMonks odds")
     print("=" * 80)
 
     return all_picks
