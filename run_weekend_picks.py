@@ -192,7 +192,14 @@ def upload_to_supabase(all_picks: list):
 def run_weekend_picks():
     """Generate value picks using YC v5 ML model + Supabase features"""
     today = datetime.now()
-    saturday = today + timedelta(days=(5 - today.weekday()) % 7)
+    # Find this weekend's Saturday (go back if today is Sat/Sun, forward otherwise)
+    day = today.weekday()  # Mon=0 … Sun=6
+    if day == 5:       # Saturday
+        saturday = today
+    elif day == 6:     # Sunday
+        saturday = today - timedelta(days=1)
+    else:              # Mon-Fri: next Saturday
+        saturday = today + timedelta(days=(5 - day) % 7)
     sunday = saturday + timedelta(days=1)
 
     print("=" * 80)
