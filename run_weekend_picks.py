@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shared_features import FeatureEngine
 from shared_features.constants import YC_V7_FEATURES
+from shared_features.ensemble import EnsembleYCModel  # needed for v10 pkl
 
 # API Keys - use env vars if available, fallback to hardcoded
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
@@ -206,12 +207,12 @@ def run_weekend_picks():
     print(f"YELLOW CARD VALUE PICKS (v6 ML) - Weekend of {saturday.strftime('%Y-%m-%d')}")
     print("=" * 80)
 
-    # Load YC v7 model (retrained on Supabase data with fouls/tackles/duels)
-    model_path = os.path.join(os.path.dirname(__file__), "epl_yellow_cards_v7.pkl")
+    # Load YC v10 model (LightGBM + XGBoost ensemble, best performer)
+    model_path = os.path.join(os.path.dirname(__file__), "epl_yellow_cards_v10.pkl")
     with open(model_path, "rb") as f:
         model_data = pickle.load(f)
     model = model_data["model"]
-    model_version = model_data.get("version", "v7")
+    model_version = model_data.get("version", "v10")
     FEATURES = model_data.get("features", YC_V7_FEATURES)
     print(f"   Loaded YC {model_version} model ({len(FEATURES)} features)")
 
