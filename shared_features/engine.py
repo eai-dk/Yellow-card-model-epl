@@ -224,7 +224,29 @@ class FeatureEngine:
             # Warm the xG cache for this opponent
             self._compute_xg_features("", opponent, match_date)
 
-        # 3. Identify unique players from the bulk data
+        # 3. Identify unique players and filter out transferred players.
+        #    Use a cached "current team" lookup to detect transfers efficiently.
+        if not hasattr(self, "_current_team_cache"):
+            self._current_team_cache = {}
+            self._current_team_fetched = False
+
+        # Fetch current team mapping once per session (single bulk query)
+        if not self._current_team_fetched:
+            from datetime import datetime as _dt, timedelta as _td
+            _cutoff = (_dt.now() - _td(days=35)).strftime("%Y-%m-%d")
+            _recent = self.db._get("player_match_stats", {
+                "select": "af_player_id,team,match_date",
+                "match_date": f"gte.{_cutoff}",
+                "order": "match_date.desc",
+                "limit": "5000",
+            })
+            # For each player, their most recent team is their current team
+            for r in _recent:
+                pid = r.get("af_player_id")
+                if pid and pid not in self._current_team_cache:
+                    self._current_team_cache[pid] = r.get("team", "")
+            self._current_team_fetched = True
+
         player_meta = {}
         for key, history in all_histories.items():
             if history:
@@ -232,6 +254,12 @@ class FeatureEngine:
                 pid = latest.get("af_player_id")
                 name = latest.get("player_name", "")
                 pos = latest.get("position", "M")
+
+                # Transfer check: if player's current team differs, skip
+                current = self._current_team_cache.get(pid)
+                if current and current != team:
+                    continue
+
                 if pid and pid not in player_meta:
                     player_meta[pid] = {"name": name, "pos": pos, "history": history}
 
