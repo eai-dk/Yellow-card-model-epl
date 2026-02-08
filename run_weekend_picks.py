@@ -2,7 +2,7 @@
 """
 Yellow Card Weekend Picks with Edge Calculation
 Uses shared_features.FeatureEngine for Supabase-backed feature engineering
-and the YC v5 CalibratedClassifierCV model for probability estimation.
+and the YC v6 CalibratedClassifierCV model for probability estimation.
 Fetches real odds from SportMonks Market 64 (Player to be booked).
 Only shows VALUE picks where edge > threshold.
 """
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 # Add parent directory to path for shared_features
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shared_features import FeatureEngine
-from shared_features.constants import YC_V5_FEATURES
+from shared_features.constants import YC_V7_FEATURES
 
 # API Keys - use env vars if available, fallback to hardcoded
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
@@ -203,15 +203,17 @@ def run_weekend_picks():
     sunday = saturday + timedelta(days=1)
 
     print("=" * 80)
-    print(f"YELLOW CARD VALUE PICKS (v5 ML) - Weekend of {saturday.strftime('%Y-%m-%d')}")
+    print(f"YELLOW CARD VALUE PICKS (v6 ML) - Weekend of {saturday.strftime('%Y-%m-%d')}")
     print("=" * 80)
 
-    # Load YC v5 model
-    model_path = os.path.join(os.path.dirname(__file__), "epl_yellow_cards_v5.pkl")
+    # Load YC v7 model (retrained on Supabase data with fouls/tackles/duels)
+    model_path = os.path.join(os.path.dirname(__file__), "epl_yellow_cards_v7.pkl")
     with open(model_path, "rb") as f:
         model_data = pickle.load(f)
     model = model_data["model"]
-    print(f"   Loaded YC v5 model ({len(YC_V5_FEATURES)} features, no scaler)")
+    model_version = model_data.get("version", "v7")
+    FEATURES = model_data.get("features", YC_V7_FEATURES)
+    print(f"   Loaded YC {model_version} model ({len(FEATURES)} features)")
 
     # Initialize shared feature engine (pulls from Supabase)
     engine = FeatureEngine()
@@ -241,7 +243,7 @@ def run_weekend_picks():
             for team, opponent, is_home in [(home, away, True), (away, home, False)]:
                 try:
                     player_features_list = engine.get_fixture_player_features(
-                        model='yc_v5',
+                        model='yc_v7',
                         team=team,
                         opponent=opponent,
                         is_home=is_home,
@@ -259,8 +261,10 @@ def run_weekend_picks():
                     pf.pop("_player_id", None)
 
                     # Build feature array and predict
-                    X = np.array([[pf[f] for f in YC_V5_FEATURES]])
+                    X = np.array([[pf[f] for f in FEATURES]])
                     prob = model.predict_proba(X)[0][1]
+                    # Clip extreme isotonic calibration artifacts
+                    prob = min(prob, 0.45)
 
                     # Match to odds
                     canonical = get_canonical_name(player_name)
@@ -314,7 +318,7 @@ def run_weekend_picks():
 
     print("\n" + "=" * 80)
     print(f"SUMMARY: {len(all_picks)} value picks with edge > {MIN_EDGE*100:.0f}%")
-    print(f"Strategy: YC v5 ML model + Supabase features + SportMonks odds")
+    print(f"Strategy: YC v6 ML model + Supabase features + SportMonks odds")
     print("=" * 80)
 
     return all_picks

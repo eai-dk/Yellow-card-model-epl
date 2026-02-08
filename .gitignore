@@ -18,6 +18,18 @@ env/
 .DS_Store
 Thumbs.db
 
+# Debug scripts
+debug_*.py
+supabase_explore.py
+supabase_inventory_report.txt
+
+# Old model versions (keep only the active one)
+epl_yellow_cards_v5.pkl
+epl_yellow_cards_v6.pkl
+epl_yellow_cards_v8.pkl
+
+# Training reports
+yc_v6_training_report.txt
+
 # API Keys (don't commit real keys!)
 # config.py with real keys
-

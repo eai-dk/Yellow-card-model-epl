@@ -90,6 +90,14 @@ def compute_rolling_stats(history: List[Dict]) -> Dict:
     career_fouls_committed_rate = career_fouls_committed / max(career_games, 1)
     career_card_rate = career_yellows / max(career_games, 1)
 
+    # ── Tackles / Duels / Interceptions stats ─────────────────────
+    tackles_avg_5 = _safe_mean([g.get("tackles_total", 0) or 0 for g in l5])
+    duels_avg_5 = _safe_mean([g.get("duels_total", 0) or 0 for g in l5])
+    interceptions_avg_5 = _safe_mean([g.get("interceptions", 0) or 0 for g in l5])
+    duels_total_5 = _safe_sum([g.get("duels_total", 0) or 0 for g in l5])
+    duels_won_5 = _safe_sum([g.get("duels_won", 0) or 0 for g in l5])
+    duel_win_pct_l5 = duels_won_5 / max(duels_total_5, 1)
+
     # ── YC stats ──────────────────────────────────────────────────
     cards_last_10 = _safe_sum([g.get("yellow_cards", 0) or 0 for g in l10])
     card_rate_last_10 = _safe_mean([g.get("yellow_cards", 0) or 0 for g in l10])
@@ -134,6 +142,38 @@ def compute_rolling_stats(history: List[Dict]) -> Dict:
     # Recent card intensity (YC model)
     recent_card_intensity = card_rate_last_10 * cards_last_10
 
+    # ── v8 derived features ───────────────────────────────────────
+
+    # card_per_foul_rate: career yellows / career fouls (foul severity)
+    card_per_foul_rate = career_yellows / max(career_fouls_committed, 1)
+
+    # fouls_per_90_l5: normalize fouls by minutes
+    fc_avg_5 = _safe_mean([g.get("fouls_committed", 0) or 0 for g in l5])
+    fouls_per_90_l5 = (fc_avg_5 / max(minutes_l5, 1)) * 90
+
+    # fouls_committed_trend: fc_avg_3 - fc_avg_10 (getting dirtier?)
+    fc_avg_3 = _safe_mean([g.get("fouls_committed", 0) or 0 for g in l3])
+    fc_avg_10 = _safe_mean([g.get("fouls_committed", 0) or 0 for g in l10])
+    fouls_committed_trend = fc_avg_3 - fc_avg_10
+
+    # season_yellows_accumulated: count of YCs in current season
+    # Approximate: count yellows across all available history in the same season
+    current_season_games = [g for g in all_games if g.get("season") == (all_games[0].get("season") if all_games else "")]
+    season_yellows_accumulated = sum(g.get("yellow_cards", 0) or 0 for g in current_season_games)
+
+    # Recency-weighted career stats (exponential decay, 0.95 factor)
+    _DECAY = 0.95
+    if career_games > 0:
+        yc_vals = [g.get("yellow_cards", 0) or 0 for g in all_games]  # most-recent first
+        fc_vals = [g.get("fouls_committed", 0) or 0 for g in all_games]
+        weights = [_DECAY ** j for j in range(len(yc_vals))]
+        w_sum = sum(weights)
+        career_card_rate_weighted = sum(y * w for y, w in zip(yc_vals, weights)) / w_sum
+        career_fc_rate_weighted = sum(f * w for f, w in zip(fc_vals, weights)) / w_sum
+    else:
+        career_card_rate_weighted = 0
+        career_fc_rate_weighted = 0
+
     return {
         # SOT / Shots
         "sot_l5": sot_l5, "sot_l10": sot_l10, "sot_season_avg": sot_season_avg,
@@ -156,6 +196,16 @@ def compute_rolling_stats(history: List[Dict]) -> Dict:
         "career_fouls_drawn_rate": career_fouls_drawn_rate,
         "career_fouls_committed_rate": career_fouls_committed_rate,
         "career_games": career_games,
+        # Tackles / Duels / Interceptions
+        "tackles_avg_5": tackles_avg_5, "duels_avg_5": duels_avg_5,
+        "interceptions_avg_5": interceptions_avg_5, "duel_win_pct_l5": duel_win_pct_l5,
+        # v8 derived
+        "card_per_foul_rate": card_per_foul_rate,
+        "fouls_per_90_l5": fouls_per_90_l5,
+        "fouls_committed_trend": fouls_committed_trend,
+        "season_yellows_accumulated": season_yellows_accumulated,
+        "career_card_rate_weighted": career_card_rate_weighted,
+        "career_fc_rate_weighted": career_fc_rate_weighted,
         # YC
         "career_card_rate": career_card_rate,
         "cards_last_10": cards_last_10, "card_rate_last_10": card_rate_last_10,

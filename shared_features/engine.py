@@ -12,15 +12,18 @@ from .player_features import compute_rolling_stats
 from .match_context import compute_match_context, compute_rest_features
 from .team_features import compute_team_goals_features
 from .constants import (
-    YC_V5_FEATURES, FOUL_DRAWN_FEATURES, FOUL_COMMITTED_FEATURES,
+    YC_V5_FEATURES, YC_V7_FEATURES, YC_V8_FEATURES,
+    FOUL_DRAWN_FEATURES, FOUL_COMMITTED_FEATURES,
     SOT_V5_FEATURES, SHOTS_COMBO_V3_FEATURES, TEAM_GOALS_V2_FEATURES,
-    POSITION_CODES, BIG_SIX,
+    POSITION_CODES, BIG_SIX, RIVALRIES,
 )
 
 
 # Map model names to their feature lists
 MODEL_FEATURES = {
     "yc_v5": YC_V5_FEATURES,
+    "yc_v7": YC_V7_FEATURES,
+    "yc_v8": YC_V8_FEATURES,
     "foul_drawn": FOUL_DRAWN_FEATURES,
     "foul_committed": FOUL_COMMITTED_FEATURES,
     "sot_v5": SOT_V5_FEATURES,
@@ -129,6 +132,14 @@ class FeatureEngine:
             team=team, opponent=opponent, match_date=match_date, history=history,
         )
 
+        # 5b. v8 features: PPDA, match card intensity, round number
+        if model == "yc_v8":
+            ppda = self._compute_ppda_features(opponent, match_date)
+            mci = self._compute_match_card_intensity(
+                team, opponent, is_home, match_date, referee_data, round_str, agg)
+            agg.update(ppda)
+            agg.update(mci)
+
         # 6. Compute xG features (for shots_combo_v3)
         xg = {}
         if model == "shots_combo_v3":
@@ -198,6 +209,15 @@ class FeatureEngine:
         # (uses caching internally, so only 2 API calls total for the fixture)
         dummy_history = []  # not used by _compute_aggregate_features
         agg = self._compute_aggregate_features(team, opponent, match_date, dummy_history)
+
+        # v8: PPDA + match card intensity (shared for fixture)
+        if model == "yc_v8":
+            ppda = self._compute_ppda_features(opponent, match_date)
+            mci = self._compute_match_card_intensity(
+                team, opponent, is_home, match_date,
+                referee_data, round_str, agg)
+            agg.update(ppda)
+            agg.update(mci)
 
         # Pre-compute xG opponent data if shots_combo model (cached)
         if model == "shots_combo_v3":
@@ -299,19 +319,23 @@ class FeatureEngine:
         team_rows = self.db.get_team_match_history(team, limit=5, before_date=match_date or None)
         team_yc = [r.get("yellow_cards", 0) or 0 for r in team_rows]
         team_defensive_pressure = np.mean(team_yc) if team_yc else 0.1
-        fixture_yc = {}
+        # team_cards_last_5: total YCs / sum of per-fixture unique player counts
+        # Must match training computation in train_yc_v6.py
+        fixture_data = {}  # fid -> {"yc": int, "players": set}
         for r in team_rows:
             fid = r.get("af_fixture_id")
-            if fid not in fixture_yc:
-                fixture_yc[fid] = 0
-            fixture_yc[fid] += r.get("yellow_cards", 0) or 0
-        last_5_totals = list(fixture_yc.values())[:5]
-        # Normalize: divide total team YCs by unique players seen
-        # Training data scale ≈ 0.54 (tree splits [0.42, 0.68])
-        num_unique_players = len(set(
-            r.get("af_player_id") or r.get("player_name") for r in team_rows
-        )) or 1
-        team_cards_last_5 = sum(last_5_totals) / num_unique_players if last_5_totals else 0.5
+            if fid not in fixture_data:
+                fixture_data[fid] = {"yc": 0, "players": set()}
+            fixture_data[fid]["yc"] += r.get("yellow_cards", 0) or 0
+            pid = r.get("af_player_id") or r.get("player_name")
+            fixture_data[fid]["players"].add(pid)
+        last_5 = list(fixture_data.values())[:5]
+        if last_5:
+            total_yc = sum(f["yc"] for f in last_5)
+            sum_per_fixture_players = sum(len(f["players"]) for f in last_5)
+            team_cards_last_5 = total_yc / max(sum_per_fixture_players, 1)
+        else:
+            team_cards_last_5 = 0.5
 
         opp_rows = self.db.get_opponent_stats(opponent, limit=5)
         opp_fc = [r.get("fouls_committed", 0) or 0 for r in opp_rows]
@@ -336,6 +360,47 @@ class FeatureEngine:
         }
         self._agg_cache[cache_key] = result
         return result
+
+    def _compute_ppda_features(self, opponent: str, match_date: str) -> Dict:
+        """Compute dynamic PPDA for the opponent from team_match_xg."""
+        opp_xg_rows = self.db.get_team_xg_history(
+            opponent, limit=5, before_date=match_date or None)
+        if opp_xg_rows:
+            ppda_vals = [float(r.get("ppda", 12) or 12) for r in opp_xg_rows]
+            opponent_ppda_l5 = float(np.mean(ppda_vals))
+        else:
+            opponent_ppda_l5 = 12.0
+        return {"opponent_ppda_l5": opponent_ppda_l5}
+
+    def _compute_match_card_intensity(
+        self, team: str, opponent: str, is_home: bool, match_date: str,
+        referee_data, round_str: str, agg: Dict,
+    ) -> Dict:
+        """Compute match-level expected card intensity."""
+        from .match_context import _parse_round
+
+        _REF_YPG_MEAN = 4.0504
+        ref_ypg = _REF_YPG_MEAN
+        if referee_data:
+            ref_ypg = float(referee_data.get("yellows_per_match", _REF_YPG_MEAN) or _REF_YPG_MEAN)
+
+        intensity = ref_ypg
+        pair = frozenset({team, opponent})
+        if pair in RIVALRIES:
+            intensity += 0.8
+
+        round_num = _parse_round(round_str)
+        if round_num >= 30:
+            intensity += 0.3
+
+        fouls_tend = agg.get("opponent_fouls_tendency", 0.55)
+        fouls_factor = fouls_tend / 0.55 if fouls_tend > 0 else 1.0
+        intensity *= fouls_factor
+
+        return {
+            "match_card_intensity": intensity,
+            "round_number": round_num,
+        }
 
     def _compute_xg_features(self, player_name: str, opponent: str, match_date: str) -> Dict:
         """xG + PPDA features for Shots Combo v3.

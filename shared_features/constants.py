@@ -108,6 +108,63 @@ SHOTS_COMBO_V3_FEATURES = [
     "shots_trend", "shot_variance_l10",
 ]
 
+YC_V8_FEATURES = [
+    # Player card history (6)
+    "career_card_rate", "cards_last_10", "card_rate_last_10",
+    "career_games", "games_since_last_card", "recent_card_intensity",
+    # Player fouling history (3)
+    "fouls_committed_avg_5", "fouls_committed_avg_10", "career_fouls_committed_rate",
+    # Foul quality + trends (4)
+    "card_per_foul_rate", "fouls_per_90_l5", "fouls_committed_trend",
+    "season_yellows_accumulated",
+    # Recency-weighted career stats (2)
+    "career_card_rate_weighted", "career_fc_rate_weighted",
+    # Player physicality (4)
+    "tackles_avg_5", "duels_avg_5", "interceptions_avg_5", "duel_win_pct_l5",
+    # Playing time (1)
+    "minutes_l5",
+    # Position (4)
+    "is_defender", "is_midfielder", "is_forward", "is_goalkeeper",
+    # Home/Away (2)
+    "is_home", "is_away",
+    # Match context (4)
+    "is_rivalry_match", "is_big6_match", "high_stakes_match", "round_number",
+    # Referee (2)
+    "referee_strictness", "cards_per_game",
+    # Team/Opponent aggregates (5)
+    "team_defensive_pressure", "team_cards_last_5",
+    "opponent_avg_cards", "opponent_fouls_tendency", "opponent_ppda_l5",
+    # Match-level intelligence (1)
+    "match_card_intensity",
+    # Season/Rest (3)
+    "late_season", "days_since_last_match", "is_short_rest",
+]
+
+YC_V7_FEATURES = [
+    # Player card history (6)
+    "career_card_rate", "cards_last_10", "card_rate_last_10",
+    "career_games", "games_since_last_card", "recent_card_intensity",
+    # Player fouling history (3) — strongest predictors
+    "fouls_committed_avg_5", "fouls_committed_avg_10", "career_fouls_committed_rate",
+    # Player physicality (2)
+    "tackles_avg_5", "duels_avg_5",
+    # Playing time exposure (1)
+    "minutes_l5",
+    # Position (4)
+    "is_defender", "is_midfielder", "is_forward", "is_goalkeeper",
+    # Home/Away (2)
+    "is_home", "is_away",
+    # Match context (3)
+    "is_rivalry_match", "is_big6_match", "high_stakes_match",
+    # Referee (2)
+    "referee_strictness", "cards_per_game",
+    # Team/Opponent aggregates (4)
+    "team_defensive_pressure", "team_cards_last_5",
+    "opponent_avg_cards", "opponent_fouls_tendency",
+    # Season/Rest (3)
+    "late_season", "days_since_last_match", "is_short_rest",
+]
+
 TEAM_GOALS_V2_FEATURES = [
     'home_xG_l5', 'home_npxG_l5', 'away_xG_l5', 'away_npxG_l5',
     'home_xGA_l5', 'home_npxGA_l5', 'away_xGA_l5', 'away_npxGA_l5',
