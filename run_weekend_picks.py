@@ -25,8 +25,8 @@ from shared_features.constants import YC_V7_FEATURES
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
 SPORTMONKS_TOKEN = os.environ.get("SPORTMONKS_TOKEN", "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef")
 
-# Edge threshold (only show picks with edge > this)
-MIN_EDGE = 0.03  # 3%
+# Minimum model probability to include in picks (filters out goalkeepers/non-starters)
+MIN_PROB = 0.08  # 8% — above base rate
 
 # Player name mapping for edge cases (our data -> SportMonks)
 PLAYER_NAME_MAPPING = {
@@ -239,7 +239,7 @@ def run_weekend_picks():
 
             print(f"\n   {home} vs {away} (Ref: {ref_name})")
 
-            # Process both teams — FeatureEngine handles referee strictness internally
+            # Process both teams
             for team, opponent, is_home in [(home, away, True), (away, home, False)]:
                 try:
                     player_features_list = engine.get_fixture_player_features(
@@ -252,7 +252,7 @@ def run_weekend_picks():
                         min_games=3,
                     )
                 except Exception as e:
-                    print(f"      ⚠️ Error getting features for {team}: {e}")
+                    print(f"      Error getting features for {team}: {e}")
                     continue
 
                 for pf in player_features_list:
@@ -263,62 +263,86 @@ def run_weekend_picks():
                     # Build feature array and predict
                     X = np.array([[pf[f] for f in FEATURES]])
                     prob = model.predict_proba(X)[0][1]
-                    # Clip extreme isotonic calibration artifacts
-                    prob = min(prob, 0.45)
+                    prob = min(prob, 0.45)  # clip isotonic artifacts
 
-                    # Match to odds
+                    # Only include players above minimum probability
+                    if prob < MIN_PROB:
+                        continue
+
+                    # Try to match odds (optional — picks are shown regardless)
                     canonical = get_canonical_name(player_name)
                     odds_data = yc_odds.get(canonical)
 
-                    if odds_data:
-                        implied = odds_data['implied_prob']
-                        edge = prob - implied
+                    pick = {
+                        'player': player_name,
+                        'team': team,
+                        'pos': position[0] if position else '?',
+                        'game': f"{home} vs {away}",
+                        'ref': ref_name,
+                        'model_prob': prob,
+                        'odds': odds_data['odds'] if odds_data else None,
+                        'implied_prob': odds_data['implied_prob'] if odds_data else None,
+                        'edge': (prob - odds_data['implied_prob']) if odds_data else None,
+                        'date': date_str,
+                    }
 
-                        if edge >= MIN_EDGE:
-                            all_picks.append({
-                                'player': player_name,
-                                'team': team,
-                                'pos': position[0] if position else '?',
-                                'game': f"{home} vs {away}",
-                                'ref': ref_name,
-                                'model_prob': prob,
-                                'odds': odds_data['odds'],
-                                'implied_prob': implied,
-                                'edge': edge,
-                                'tier': 'ML_VALUE',
-                                'date': date_str,
-                            })
+                    # Assign tier based on probability
+                    if prob >= 0.20:
+                        pick['tier'] = 'TOP_PICK'
+                    elif prob >= 0.15:
+                        pick['tier'] = 'STRONG'
+                    elif prob >= 0.10:
+                        pick['tier'] = 'MODERATE'
+                    else:
+                        pick['tier'] = 'LONGSHOT'
 
-    all_picks.sort(key=lambda x: x['edge'], reverse=True)
+                    all_picks.append(pick)
+
+    # Sort by probability (highest first)
+    all_picks.sort(key=lambda x: x['model_prob'], reverse=True)
 
     print("\n" + "=" * 80)
-    print(f"VALUE PICKS (Edge > {MIN_EDGE*100:.0f}%)")
+    print(f"YC PREDICTIONS — Ranked by Model Probability")
     print("=" * 80)
 
     if not all_picks:
-        print("\nNo value picks found. Either:")
-        print("   - Odds not available yet (check 24-48 hrs before kickoff)")
-        print("   - No edge vs bookmaker prices")
-        print("   - Players not in Supabase yet")
+        print("\nNo predictions generated.")
     else:
+        current_game = None
         for pick in all_picks:
-            edge_pct = pick['edge'] * 100
-            prob_pct = pick['model_prob'] * 100
-            implied_pct = pick['implied_prob'] * 100
+            if pick['game'] != current_game:
+                current_game = pick['game']
+                print(f"\n   --- {pick['game']} (Ref: {pick['ref']}) ---")
 
-            print(f"\n   {pick['player']} ({pick['team']}) - {pick['pos']}")
-            print(f"   Game: {pick['game']} | Ref: {pick['ref']}")
-            print(f"   Model: {prob_pct:.1f}% | Odds: {pick['odds']} (implied {implied_pct:.1f}%)")
-            print(f"   EDGE: +{edge_pct:.1f}%")
+            prob_pct = pick['model_prob'] * 100
+            odds_str = f"@ {pick['odds']:.2f}" if pick['odds'] else ""
+            edge_str = ""
+            if pick['edge'] is not None:
+                edge_str = f" (edge {pick['edge']*100:+.1f}%)" if pick['edge'] > 0 else ""
+
+            tier_marker = {"TOP_PICK": "***", "STRONG": "**", "MODERATE": "*", "LONGSHOT": ""}
+            marker = tier_marker.get(pick['tier'], "")
+
+            print(f"   {prob_pct:5.1f}% {marker:3s} {pick['player'][:25]:25s} {pick['team'][:15]:15s} "
+                  f"{pick['pos']} {odds_str} {edge_str}")
 
     if all_picks:
         df = pd.DataFrame(all_picks)
         df.to_csv("weekend_yc_picks.csv", index=False)
-        print(f"\nSaved {len(all_picks)} picks to weekend_yc_picks.csv")
+        print(f"\n   Saved {len(all_picks)} picks to weekend_yc_picks.csv")
+
+    # Summary by tier
+    tiers = {}
+    for p in all_picks:
+        t = p['tier']
+        tiers[t] = tiers.get(t, 0) + 1
 
     print("\n" + "=" * 80)
-    print(f"SUMMARY: {len(all_picks)} value picks with edge > {MIN_EDGE*100:.0f}%")
-    print(f"Strategy: YC v6 ML model + Supabase features + SportMonks odds")
+    print(f"SUMMARY: {len(all_picks)} predictions across {len(set(p['game'] for p in all_picks))} matches")
+    for tier in ['TOP_PICK', 'STRONG', 'MODERATE', 'LONGSHOT']:
+        if tier in tiers:
+            print(f"   {tier:12s}: {tiers[tier]} players")
+    print(f"Strategy: YC v7 model + Supabase features (ranked by probability)")
     print("=" * 80)
 
     return all_picks
