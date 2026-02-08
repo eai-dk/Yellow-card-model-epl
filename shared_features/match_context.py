@@ -58,12 +58,16 @@ def compute_match_context(
         late_season = 0
 
     # Referee
+    # Z-score parameters derived from referee_stats.csv (47 EPL referees)
+    _REF_YPG_MEAN = 4.0504
+    _REF_YPG_STD = 0.8485
     if referee_data:
-        referee_strictness = float(referee_data.get("yellows_per_match", 3.5) or 3.5)
-        cards_per_game = referee_strictness
+        raw_ypg = float(referee_data.get("yellows_per_match", _REF_YPG_MEAN) or _REF_YPG_MEAN)
+        referee_strictness = (raw_ypg - _REF_YPG_MEAN) / _REF_YPG_STD   # z-scored
+        cards_per_game = raw_ypg                                          # raw yellows/match
     else:
-        referee_strictness = 3.5
-        cards_per_game = 3.5
+        referee_strictness = 0.0          # z-score mean → average referee
+        cards_per_game = _REF_YPG_MEAN    # league average raw value
 
     # Opponent quality
     if opponent_team_data:

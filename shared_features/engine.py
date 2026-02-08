@@ -306,7 +306,12 @@ class FeatureEngine:
                 fixture_yc[fid] = 0
             fixture_yc[fid] += r.get("yellow_cards", 0) or 0
         last_5_totals = list(fixture_yc.values())[:5]
-        team_cards_last_5 = sum(last_5_totals) if last_5_totals else 0
+        # Normalize: divide total team YCs by unique players seen
+        # Training data scale ≈ 0.54 (tree splits [0.42, 0.68])
+        num_unique_players = len(set(
+            r.get("af_player_id") or r.get("player_name") for r in team_rows
+        )) or 1
+        team_cards_last_5 = sum(last_5_totals) / num_unique_players if last_5_totals else 0.5
 
         opp_rows = self.db.get_opponent_stats(opponent, limit=5)
         opp_fc = [r.get("fouls_committed", 0) or 0 for r in opp_rows]
