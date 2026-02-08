@@ -99,10 +99,12 @@ class SupabaseClient:
 
     def get_all_team_player_histories(
         self, team: str, limit_per_player: int = 50, before_date: str = None,
+        season_start: str = "2025-08-01",
     ) -> Dict[str, List[Dict]]:
         """
         Batch-fetch ALL player histories for a team in a single query.
         Returns dict keyed by (af_player_id or player_name) -> list of match rows.
+        Only includes matches from season_start onwards to exclude transferred players.
         """
         params = {
             "select": "*",
@@ -110,8 +112,13 @@ class SupabaseClient:
             "order": "match_date.desc",
             "limit": "5000",
         }
-        if before_date:
+        # Build date filter: after season_start AND before match_date
+        if before_date and season_start:
+            params["and"] = f"(match_date.gte.{season_start},match_date.lt.{before_date})"
+        elif before_date:
             params["match_date"] = f"lt.{before_date}"
+        elif season_start:
+            params["match_date"] = f"gte.{season_start}"
 
         rows = self._get("player_match_stats", params)
 
