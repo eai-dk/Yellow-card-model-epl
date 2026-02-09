@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Yellow Card Weekend Picks with Edge Calculation
 Uses shared_features.FeatureEngine for Supabase-backed feature engineering
@@ -193,18 +193,14 @@ def upload_to_supabase(all_picks: list):
 def run_weekend_picks():
     """Generate value picks using YC v5 ML model + Supabase features"""
     today = datetime.now()
-    # Find this weekend's Saturday (go back if today is Sat/Sun, forward otherwise)
-    day = today.weekday()  # Mon=0 … Sun=6
-    if day == 5:       # Saturday
-        saturday = today
-    elif day == 6:     # Sunday
-        saturday = today - timedelta(days=1)
-    else:              # Mon-Fri: next Saturday
-        saturday = today + timedelta(days=(5 - day) % 7)
-    sunday = saturday + timedelta(days=1)
+
+    # Generate predictions for the next 7 days (covers midweek + weekend)
+    start_date = today
+    end_date = today + timedelta(days=7)
+    dates = [(today + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
 
     print("=" * 80)
-    print(f"YELLOW CARD VALUE PICKS (v6 ML) - Weekend of {saturday.strftime('%Y-%m-%d')}")
+    print(f"YELLOW CARD VALUE PICKS (v6 ML) - {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
     print("=" * 80)
 
     # Load YC v10 model (LightGBM + XGBoost ensemble, best performer)
@@ -221,12 +217,12 @@ def run_weekend_picks():
 
     # Fetch odds
     print("\nFetching bookmaker odds from SportMonks...")
-    yc_odds = get_sportmonks_yc_odds(saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d'))
+    yc_odds = get_sportmonks_yc_odds(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
     print(f"   Found {len(yc_odds)} player booking odds")
 
     all_picks = []
 
-    for date_str in [saturday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')]:
+    for date_str in dates:
         fixtures = get_fixtures(date_str)
         print(f"\n   {date_str}: {len(fixtures)} fixtures")
 
