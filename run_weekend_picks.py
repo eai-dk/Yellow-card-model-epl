@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shared_features import FeatureEngine
 from shared_features.constants import YC_V7_FEATURES
 from shared_features.ensemble import EnsembleYCModel  # needed for v10 pkl
+from squad_validator import validate_predictions
 
 # API Keys - use env vars if available, fallback to hardcoded
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
@@ -346,4 +347,6 @@ def run_weekend_picks():
 
 if __name__ == "__main__":
     picks = run_weekend_picks()
+    picks = validate_predictions(picks)
     upload_to_supabase(picks)
+
