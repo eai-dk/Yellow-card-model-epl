@@ -1,8 +1,13 @@
 ﻿"""
 Squad Validator - Centralized 25/26 EPL Squad Data
-===================================================
+=====================================================
 Loads current squad data from local epl-squads-full.json file
 and validates/corrects player-team mappings in predictions.
+
+Key behavior:
+  - Corrects team name if player transferred (e.g. Semenyo -> Man City)
+  - REMOVES predictions where corrected team doesn't match either team
+    in the fixture (player shouldn't be predicted for that match at all)
 """
 
 import json
@@ -15,12 +20,61 @@ _squad_cache: Dict = {}
 
 LOCAL_SQUAD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "epl-squads-full.json")
 
+# Team name aliases for matching fixture strings
+TEAM_ALIASES = {
+    "Manchester City": ["manchester city", "man city", "man. city"],
+    "Manchester United": ["manchester united", "man united", "man utd", "man. united"],
+    "Newcastle": ["newcastle", "newcastle united"],
+    "Tottenham": ["tottenham", "tottenham hotspur", "spurs"],
+    "Wolves": ["wolves", "wolverhampton", "wolverhampton wanderers"],
+    "Brighton": ["brighton", "brighton & hove albion", "brighton and hove albion"],
+    "Nottingham Forest": ["nottingham forest", "nott'm forest", "nottm forest"],
+    "West Ham": ["west ham", "west ham united"],
+    "Crystal Palace": ["crystal palace"],
+    "Aston Villa": ["aston villa"],
+    "Leicester": ["leicester", "leicester city"],
+    "Bournemouth": ["bournemouth", "afc bournemouth"],
+    "Fulham": ["fulham"],
+    "Everton": ["everton"],
+    "Liverpool": ["liverpool"],
+    "Arsenal": ["arsenal"],
+    "Chelsea": ["chelsea"],
+    "Ipswich": ["ipswich", "ipswich town"],
+    "Sunderland": ["sunderland"],
+    "Burnley": ["burnley"],
+    "Leeds": ["leeds", "leeds united"],
+    "Sheffield Utd": ["sheffield utd", "sheffield united", "sheffield"],
+    "Southampton": ["southampton"],
+}
+
 
 def normalize_name(name: str) -> str:
     if not name:
         return ""
     name = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("ASCII")
     return name.lower().strip()
+
+
+def team_in_fixture(team_name: str, fixture_str: str) -> bool:
+    """Check if team_name matches any part of the fixture string."""
+    if not team_name or not fixture_str:
+        return False
+    fixture_lower = fixture_str.lower()
+    team_lower = team_name.lower()
+
+    # Direct check
+    if team_lower in fixture_lower:
+        return True
+
+    # Check aliases
+    for canonical, aliases in TEAM_ALIASES.items():
+        if normalize_name(canonical) == normalize_name(team_name) or normalize_name(team_name) in [normalize_name(a) for a in aliases]:
+            for alias in aliases:
+                if alias in fixture_lower:
+                    return True
+            if normalize_name(canonical) in fixture_lower:
+                return True
+    return False
 
 
 def get_squad_data() -> Dict[str, List[Dict]]:
@@ -107,6 +161,8 @@ def find_player_team(player_name: str) -> Optional[str]:
 def validate_predictions(predictions: List[Dict]) -> List[Dict]:
     """
     Validate predictions against squad data.
+    - Corrects team name if player transferred
+    - REMOVES predictions where corrected team doesn't match fixture
     If squad data unavailable, return predictions unchanged.
     """
     squad_data = get_squad_data()
@@ -115,6 +171,7 @@ def validate_predictions(predictions: List[Dict]) -> List[Dict]:
         return predictions
 
     corrections = 0
+    removals = 0
     validated = []
     for pred in predictions:
         player_name = pred.get("player_name") or pred.get("player", "")
@@ -125,16 +182,28 @@ def validate_predictions(predictions: List[Dict]) -> List[Dict]:
         current_team = find_player_team(player_name)
         if current_team is None:
             validated.append(pred)
-        else:
-            claimed_team = pred.get("team", "")
-            if normalize_name(current_team) != normalize_name(claimed_team):
+            continue
+
+        claimed_team = pred.get("team", "")
+        fixture = pred.get("game") or pred.get("fixture", "")
+
+        if normalize_name(current_team) != normalize_name(claimed_team):
+            # Player's real team differs from prediction team
+            # Check if their REAL team is in this fixture
+            if fixture and not team_in_fixture(current_team, fixture):
+                # Player shouldn't be in this fixture at all - REMOVE
+                print(f"[SquadValidator] REMOVED {player_name}: plays for {current_team}, not in fixture '{fixture}'")
+                removals += 1
+                continue
+            else:
+                # Real team IS in the fixture - just correct the team name
                 corrected = pred.copy()
                 corrected["team"] = current_team
                 print(f"[SquadValidator] Corrected {player_name}: {claimed_team} -> {current_team}")
                 corrections += 1
                 validated.append(corrected)
-            else:
-                validated.append(pred)
+        else:
+            validated.append(pred)
 
-    print(f"[SquadValidator] Validated {len(validated)} predictions, {corrections} corrections made")
+    print(f"[SquadValidator] Validated {len(validated)} predictions, {corrections} corrections, {removals} removals")
     return validated
