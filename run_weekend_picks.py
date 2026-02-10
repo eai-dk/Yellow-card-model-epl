@@ -48,6 +48,15 @@ PLAYER_NAME_MAPPING = {
     "bruno guimaraes": "bruno guimaraes rodriguez",
     "lucas paqueta": "lucas paqueta bezerra",
     "darwin nunez": "darwin nunez ribeiro",
+    # New mappings for previously unmatched Sportmonks names
+    "el hadji malick diouf": "el hadji diouf",
+    "iliman ndiaye": "iliman-cheikh ndiaye",
+    "jean-ricner bellegarde": "jeanricner bellegarde",
+    "murillo": "murillo dos santos",
+    "alex jimenez": "alejandro jimenez",
+    "abdukodir khusanov": "abduqodir khusanov",
+    "alisson": "alisson becker",
+    "dorde petrovic": "djordje petrovic",
 }
 
 def normalize_player_name(name: str) -> str:
