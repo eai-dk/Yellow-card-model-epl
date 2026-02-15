@@ -11,6 +11,8 @@ import os
 import sys
 import pickle
 import requests
+import psycopg2
+import psycopg2.extras
 import numpy as np
 import pandas as pd
 import unicodedata
@@ -81,7 +83,7 @@ def get_canonical_name(name: str) -> str:
     norm = normalize_player_name(name)
     return PLAYER_NAME_MAPPING.get(norm, norm)
 
-# Team name mapping (API-Football -> our data)
+# Team name mapping (SportMonks / API-Football -> our data)
 TEAM_MAPPING = {
     "Brighton & Hove Albion": "Brighton",
     "Brighton and Hove Albion": "Brighton",
@@ -95,6 +97,7 @@ TEAM_MAPPING = {
     "West Ham United": "West Ham",
     "Leeds United": "Leeds",
     "Tottenham Hotspur": "Tottenham",
+    "AFC Bournemouth": "Bournemouth",
 }
 
 def normalize_team(name: str) -> str:
@@ -103,13 +106,23 @@ def normalize_team(name: str) -> str:
 
 
 
-def get_fixtures(date_str: str) -> list:
-    """Fetch EPL fixtures from API-Football"""
-    url = "https://v3.football.api-sports.io/fixtures"
-    headers = {"x-apisports-key": API_FOOTBALL_KEY}
-    params = {"league": 39, "season": 2025, "date": date_str}
-    resp = requests.get(url, headers=headers, params=params)
-    return resp.json().get("response", [])
+SPORTMONKS_BASE = "https://api.sportmonks.com/v3/football"
+EPL_LEAGUE_ID = 8  # SportMonks EPL league ID
+
+def fetch_sportmonks_fixtures(start_date, end_date):
+    """Fetch upcoming EPL fixtures from SportMonks (replaces API-Football)."""
+    url = f"{SPORTMONKS_BASE}/fixtures/between/{start_date}/{end_date}"
+    params = {
+        "api_token": SPORTMONKS_TOKEN,
+        "filters": f"fixtureLeagues:{EPL_LEAGUE_ID}",
+        "include": "participants;referees",
+        "per_page": 50,
+    }
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        print(f"   ⚠️ Error fetching fixtures: {resp.status_code}")
+        return []
+    return resp.json().get("data", [])
 
 def get_sportmonks_yc_odds(start_date: str, end_date: str) -> dict:
     """Fetch player booking odds from SportMonks (Market 64)"""
@@ -137,68 +150,47 @@ def get_sportmonks_yc_odds(start_date: str, end_date: str) -> dict:
                     }
     return player_odds
 
-def upload_to_supabase(all_picks: list):
-    """Upload predictions to Supabase database"""
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_secret_8qWDEuaM0lh95i_CwBgl8A_MgxI1vQK")
-    
-    if not SUPABASE_KEY:
-        print("   SUPABASE_KEY not set, skipping upload")
+def upload_to_db(all_picks: list):
+    """Upload predictions to yc_predictions table via psycopg2"""
+    DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    if not DATABASE_URL:
+        print("   DATABASE_URL not set, skipping upload")
         return
-    
     if not all_picks:
         print("   No picks to upload")
         return
-    
-    print("\n8. Uploading predictions to Supabase...")
-    
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
-    }
-    
-    # Clear old predictions for these dates
-    dates_to_clear = list(set([p['date'] for p in all_picks]))
-    for date_str in dates_to_clear:
-        delete_url = f"{SUPABASE_URL}/rest/v1/yc_predictions?fixture_date=eq.{date_str}"
-        requests.delete(delete_url, headers=headers)
-    
-    print(f"   Cleared old predictions for {dates_to_clear}")
-    
-    # Prepare records for upload
-    records = []
+
+    print("\n8. Uploading predictions to DB...")
     generated_at = datetime.utcnow().isoformat()
-    
+    records = []
     for pick in all_picks:
-        records.append({
-            "fixture_date": pick['date'],
-            "player_name": pick['player'],
-            "team": pick['team'],
-            "position": pick['pos'],
-            "fixture": pick['game'],
-            "referee": pick['ref'],
-            "model_probability": round(pick['model_prob'], 4),
-            "odds": round(pick['odds'], 2) if pick.get('odds') else None,
-            "implied_probability": round(pick['implied_prob'], 4) if pick.get('implied_prob') else None,
-            "edge": round(pick['edge'], 4) if pick.get('edge') else None,
-            "tier": pick['tier'],
-            "generated_at": generated_at
-        })
-    
-    # Upload in batches
-    batch_size = 50
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i+batch_size]
-        insert_url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
-        resp = requests.post(insert_url, headers=headers, json=batch)
-        if resp.status_code in [200, 201]:
-            print(f"   Uploaded batch {i//batch_size + 1}: {len(batch)} records")
-        else:
-            print(f"   Error uploading batch: {resp.text[:200]}")
-    
-    print(f"   Uploaded {len(records)} predictions to Supabase")
+        records.append((
+            pick['date'], pick['player'], pick['team'], pick['pos'],
+            pick['game'], pick['ref'],
+            round(pick['model_prob'], 4),
+            round(pick['odds'], 2) if pick.get('odds') else None,
+            round(pick['implied_prob'], 4) if pick.get('implied_prob') else None,
+            round(pick['edge'], 4) if pick.get('edge') else None,
+            pick['tier'], generated_at,
+        ))
+
+    dates_to_clear = list(set([p['date'] for p in all_picks]))
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            for d in dates_to_clear:
+                cur.execute("DELETE FROM yc_predictions WHERE fixture_date = %s", (d,))
+            psycopg2.extras.execute_batch(cur, """
+                INSERT INTO yc_predictions
+                (fixture_date, player_name, team, position, fixture, referee,
+                 model_probability, odds, implied_probability, edge, tier, generated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, records)
+            conn.commit()
+        conn.close()
+        print(f"   ✅ Uploaded {len(records)} predictions to DB")
+    except Exception as e:
+        print(f"   ⚠️ Upload error: {e}")
 
 def run_weekend_picks():
     """Generate value picks using YC v5 ML model + Supabase features"""
@@ -207,10 +199,11 @@ def run_weekend_picks():
     # Generate predictions for the next 7 days (covers midweek + weekend)
     start_date = today
     end_date = today + timedelta(days=7)
-    dates = [(today + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
+    start_str = start_date.strftime('%Y-%m-%d')
+    end_str = end_date.strftime('%Y-%m-%d')
 
     print("=" * 80)
-    print(f"YELLOW CARD VALUE PICKS (v6 ML) - {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    print(f"YELLOW CARD VALUE PICKS (v6 ML) - {start_str} to {end_str}")
     print("=" * 80)
 
     # Load YC v10 model (LightGBM + XGBoost ensemble, best performer)
@@ -227,83 +220,91 @@ def run_weekend_picks():
 
     # Fetch odds
     print("\nFetching bookmaker odds from SportMonks...")
-    yc_odds = get_sportmonks_yc_odds(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    yc_odds = get_sportmonks_yc_odds(start_str, end_str)
     print(f"   Found {len(yc_odds)} player booking odds")
+
+    # Fetch fixtures from SportMonks (single call for entire date range)
+    print("\n📅 Fetching fixtures from SportMonks...")
+    fixtures = fetch_sportmonks_fixtures(start_str, end_str)
+    print(f"   Found {len(fixtures)} fixtures")
 
     all_picks = []
 
-    for date_str in dates:
-        fixtures = get_fixtures(date_str)
-        print(f"\n   {date_str}: {len(fixtures)} fixtures")
+    for fix in sorted(fixtures, key=lambda x: x.get("starting_at", "")):
+        participants = {p["meta"]["location"]: p["name"] for p in fix.get("participants", [])}
+        home_raw = participants.get("home", "Unknown")
+        away_raw = participants.get("away", "Unknown")
+        home = normalize_team(home_raw)
+        away = normalize_team(away_raw)
+        date_str = fix.get("starting_at", "")[:10]
 
-        for fix in fixtures:
-            home_raw = fix["teams"]["home"]["name"]
-            away_raw = fix["teams"]["away"]["name"]
-            home = normalize_team(home_raw)
-            away = normalize_team(away_raw)
-            ref = fix["fixture"].get("referee", "TBD")
-            ref_name = ref.split(",")[0].strip() if ref else "TBD"
+        # Extract referee from SportMonks referees include
+        ref_name = "TBD"
+        for ref in fix.get("referees", []) or []:
+            if ref.get("type_id") == 1 or ref.get("type", {}).get("name", "").lower() == "main":
+                ref_name = ref.get("common_name") or ref.get("name", "TBD")
+                break
 
-            print(f"\n   {home} vs {away} (Ref: {ref_name})")
+        print(f"\n   {home} vs {away} (Ref: {ref_name})")
 
-            # Process both teams
-            for team, opponent, is_home in [(home, away, True), (away, home, False)]:
-                try:
-                    player_features_list = engine.get_fixture_player_features(
-                        model='yc_v7',
-                        team=team,
-                        opponent=opponent,
-                        is_home=is_home,
-                        match_date=date_str,
-                        referee=ref_name,
-                        min_games=3,
-                    )
-                except Exception as e:
-                    print(f"      Error getting features for {team}: {e}")
+        # Process both teams
+        for team, opponent, is_home in [(home, away, True), (away, home, False)]:
+            try:
+                player_features_list = engine.get_fixture_player_features(
+                    model='yc_v7',
+                    team=team,
+                    opponent=opponent,
+                    is_home=is_home,
+                    match_date=date_str,
+                    referee=ref_name,
+                    min_games=3,
+                )
+            except Exception as e:
+                print(f"      Error getting features for {team}: {e}")
+                continue
+
+            for pf in player_features_list:
+                player_name = pf.pop("_player_name", "Unknown")
+                position = pf.pop("_position", "M")
+                pf.pop("_player_id", None)
+
+                # Build feature array and predict
+                X = np.array([[pf[f] for f in FEATURES]])
+                prob = model.predict_proba(X)[0][1]
+                prob = min(prob, 0.45)  # clip isotonic artifacts
+
+                # Only include players above minimum probability
+                if prob < MIN_PROB:
                     continue
 
-                for pf in player_features_list:
-                    player_name = pf.pop("_player_name", "Unknown")
-                    position = pf.pop("_position", "M")
-                    pf.pop("_player_id", None)
+                # Try to match odds (optional — picks are shown regardless)
+                canonical = get_canonical_name(player_name)
+                odds_data = yc_odds.get(canonical)
 
-                    # Build feature array and predict
-                    X = np.array([[pf[f] for f in FEATURES]])
-                    prob = model.predict_proba(X)[0][1]
-                    prob = min(prob, 0.45)  # clip isotonic artifacts
+                pick = {
+                    'player': player_name,
+                    'team': team,
+                    'pos': position[0] if position else '?',
+                    'game': f"{home} vs {away}",
+                    'ref': ref_name,
+                    'model_prob': prob,
+                    'odds': odds_data['odds'] if odds_data else None,
+                    'implied_prob': odds_data['implied_prob'] if odds_data else None,
+                    'edge': (prob - odds_data['implied_prob']) if odds_data else None,
+                    'date': date_str,
+                }
 
-                    # Only include players above minimum probability
-                    if prob < MIN_PROB:
-                        continue
+                # Assign tier based on probability
+                if prob >= 0.20:
+                    pick['tier'] = 'TOP_PICK'
+                elif prob >= 0.15:
+                    pick['tier'] = 'STRONG'
+                elif prob >= 0.10:
+                    pick['tier'] = 'MODERATE'
+                else:
+                    pick['tier'] = 'LONGSHOT'
 
-                    # Try to match odds (optional — picks are shown regardless)
-                    canonical = get_canonical_name(player_name)
-                    odds_data = yc_odds.get(canonical)
-
-                    pick = {
-                        'player': player_name,
-                        'team': team,
-                        'pos': position[0] if position else '?',
-                        'game': f"{home} vs {away}",
-                        'ref': ref_name,
-                        'model_prob': prob,
-                        'odds': odds_data['odds'] if odds_data else None,
-                        'implied_prob': odds_data['implied_prob'] if odds_data else None,
-                        'edge': (prob - odds_data['implied_prob']) if odds_data else None,
-                        'date': date_str,
-                    }
-
-                    # Assign tier based on probability
-                    if prob >= 0.20:
-                        pick['tier'] = 'TOP_PICK'
-                    elif prob >= 0.15:
-                        pick['tier'] = 'STRONG'
-                    elif prob >= 0.10:
-                        pick['tier'] = 'MODERATE'
-                    else:
-                        pick['tier'] = 'LONGSHOT'
-
-                    all_picks.append(pick)
+                all_picks.append(pick)
 
     # Sort by probability (highest first)
     all_picks.sort(key=lambda x: x['model_prob'], reverse=True)
@@ -357,5 +358,5 @@ def run_weekend_picks():
 if __name__ == "__main__":
     picks = run_weekend_picks()
     picks = validate_predictions(picks)
-    upload_to_supabase(picks)
+    upload_to_db(picks)
 
