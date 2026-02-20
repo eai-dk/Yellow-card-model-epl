@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Compute Yellow Card picks with odds from SportMonks and store in Supabase.
-This runs every 10 minutes via GitHub Actions to keep picks fresh.
+Compute Yellow Card picks with odds from SportMonks and store in DB.
+This runs every 10 minutes via EventBridge + ECS Scheduled Task.
 """
 
 import os
 import requests
 import unicodedata
 import json
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 # Configuration
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kijtxzvbvhgswpahmvua.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 SPORTMONKS_TOKEN = os.environ.get("SPORTMONKS_TOKEN", "fd9XKsnh82xRG52vayu1ZZ1nbK8kdOk3s5Ex3ss7U2NV7MDejezJr3FNLFef")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "0b8d12ae574703056b109de918c240ef")
 
@@ -66,29 +68,145 @@ def get_canonical_name(name: str) -> str:
     return PLAYER_NAME_MAPPING.get(norm, norm)
 
 
-def get_supabase_headers():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
+TEAM_ALIASES = {
+    "afc bournemouth": "bournemouth", "brighton & hove albion": "brighton",
+    "wolverhampton wanderers": "wolves", "nottingham forest": "nott'm forest",
+    "tottenham hotspur": "tottenham", "west ham united": "west ham",
+    "newcastle united": "newcastle", "manchester united": "man united",
+    "manchester city": "man city", "leeds united": "leeds",
+}
+
+
+def normalize_team_name(name):
+    n = name.lower().strip()
+    return TEAM_ALIASES.get(n, n)
+
+
+def get_db_conn():
+    return psycopg2.connect(DATABASE_URL)
+
+
+def fetch_sportmonks_lineups():
+    """Fetch confirmed lineups from SportMonks for upcoming EPL fixtures."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    end_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+    url = f"https://api.sportmonks.com/v3/football/fixtures/between/{today}/{end_date}"
+    params = {
+        "api_token": SPORTMONKS_TOKEN,
+        "filters": "fixtureLeagues:8",
+        "include": "lineups.player;participants",
+        "per_page": 50,
     }
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        return resp.json().get("data", [])
+    except Exception as e:
+        print(f"Error fetching lineups: {e}")
+        return []
+
+
+def build_lineup_sets(fixtures):
+    """
+    Build confirmed starting XI sets per fixture. Returns {(home_norm, away_norm): set(names)}.
+    Only uses lineups for fixtures within 90 minutes of kickoff (lineups are announced ~75 min
+    before KO). For fixtures further out, SportMonks returns predicted lineups which are
+    unreliable — those are skipped so all players pass through.
+    """
+    lineup_map = {}
+    now = datetime.now()
+    for fixture in fixtures:
+        name = fixture.get("name", "")
+        parts = name.split(" vs ")
+        if len(parts) != 2:
+            continue
+        home_norm = normalize_team_name(parts[0].strip())
+        away_norm = normalize_team_name(parts[1].strip())
+        lineups = fixture.get("lineups", [])
+        if not lineups:
+            continue
+        # Only trust lineups if fixture is within 90 minutes of kickoff
+        starting_at = fixture.get("starting_at", "")
+        if starting_at:
+            try:
+                ko_time = datetime.fromisoformat(starting_at.replace("Z", "+00:00"))
+                ko_naive = ko_time.replace(tzinfo=None)
+                minutes_until = (ko_naive - now).total_seconds() / 60
+                if minutes_until > 90:
+                    continue  # Too far from kickoff — lineups are predicted, not confirmed
+            except (ValueError, TypeError):
+                continue
+        starters = set()
+        for entry in lineups:
+            if entry.get("type_id") != 11:
+                continue
+            player = entry.get("player", {}) or {}
+            display_name = player.get("display_name", "")
+            if display_name:
+                starters.add(normalize_name(display_name))
+        if starters:
+            lineup_map[(home_norm, away_norm)] = starters
+            print(f"  Lineup confirmed for {parts[0].strip()} vs {parts[1].strip()}: {len(starters)} starters")
+    return lineup_map
+
+
+def is_player_in_lineup(player_name, team, opponent, lineup_map):
+    """Check if player is in confirmed starting XI. Returns True if in lineup OR no lineup available."""
+    team_norm = normalize_team_name(team) if team else ""
+    opp_norm = normalize_team_name(opponent) if opponent else ""
+
+    starters = None
+    for key in lineup_map:
+        home_norm, away_norm = key
+        team_is_home = team_norm and (team_norm in home_norm or home_norm in team_norm)
+        team_is_away = team_norm and (team_norm in away_norm or away_norm in team_norm)
+        opp_is_home = opp_norm and (opp_norm in home_norm or home_norm in opp_norm)
+        opp_is_away = opp_norm and (opp_norm in away_norm or away_norm in opp_norm)
+        if (team_is_home and opp_is_away) or (team_is_away and opp_is_home):
+            starters = lineup_map[key]
+            break
+        if not opp_norm and (team_is_home or team_is_away):
+            starters = lineup_map[key]
+            break
+
+    if starters is None:
+        return True  # No lineup available — let all players through
+
+    player_norm = normalize_name(player_name)
+    player_canonical = get_canonical_name(player_name)
+    if player_norm in starters or player_canonical in starters:
+        return True
+
+    # Fuzzy match on last name
+    player_parts = player_norm.split()
+    if len(player_parts) >= 2:
+        last_name = player_parts[-1]
+        for starter in starters:
+            starter_parts = starter.split()
+            if len(starter_parts) >= 2 and starter_parts[-1] == last_name:
+                score = SequenceMatcher(None, player_norm, starter).ratio()
+                if score > 0.65:
+                    return True
+
+    return False
 
 
 def fetch_predictions():
-    """Fetch YC predictions from Supabase"""
+    """Fetch YC predictions from DB"""
     today = datetime.now().strftime("%Y-%m-%d")
     end_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    
-    url = f"{SUPABASE_URL}/rest/v1/yc_predictions"
-    params = f"?fixture_date=gte.{today}&fixture_date=lte.{end_date}&order=model_probability.desc"
-    
-    resp = requests.get(url + params, headers=get_supabase_headers(), timeout=30)
-    if resp.status_code != 200:
-        print(f"Error fetching predictions: {resp.status_code} - {resp.text[:200]}")
+    try:
+        conn = get_db_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM yc_predictions WHERE fixture_date >= %s AND fixture_date <= %s ORDER BY model_probability DESC",
+                (today, end_date),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching predictions: {e}")
         return []
-    
-    return resp.json()
 
 
 def fetch_fixtures():
@@ -146,26 +264,36 @@ def compute_picks_with_odds():
     
     # Fetch predictions
     predictions = fetch_predictions()
-    print(f"Fetched {len(predictions)} predictions from Supabase")
-    
+    print(f"Fetched {len(predictions)} predictions")
+
     if not predictions:
         print("No predictions found")
         return
-    
-    # Fetch fixtures
+
+    # Fetch fixtures from API-Football
     fixtures = fetch_fixtures()
     print(f"Fetched {len(fixtures)} fixtures")
-    
-    # Get SportMonks fixture IDs (need to map from API-Football)
-    # For now, use the odds already in predictions if available
-    
+
+    # Fetch confirmed lineups from SportMonks
+    sm_fixtures = fetch_sportmonks_lineups()
+    lineup_map = build_lineup_sets(sm_fixtures)
+    print(f"Lineup data available for {len(lineup_map)} fixtures")
+
     picks = []
+    lineup_filtered = 0
     for pred in predictions:
         player_name = pred.get("player_name", "")
         team = pred.get("team", "")
+        opponent = pred.get("opponent", "")
+
+        # Filter by confirmed lineups
+        if not is_player_in_lineup(player_name, team, opponent, lineup_map):
+            lineup_filtered += 1
+            continue
+
         prob = float(pred.get("model_probability", 0) or 0)
         odds = float(pred.get("odds", 0) or 0)
-        
+
         if prob <= 0:
             continue
         
@@ -201,38 +329,42 @@ def compute_picks_with_odds():
         }
         picks.append(pick)
     
+    if lineup_filtered > 0:
+        print(f"Lineup filter: removed {lineup_filtered} players not in confirmed starting XI")
     print(f"Computed {len(picks)} picks")
-    
-    # Store in Supabase
+
+    # Store picks
     store_picks(picks)
 
 
 def store_picks(picks):
-    """Store computed picks in Supabase"""
+    """Store computed picks in DB via psycopg2"""
     if not picks:
         return
-    
-    # Delete old picks first
     today = datetime.now().strftime("%Y-%m-%d")
-    delete_url = f"{SUPABASE_URL}/rest/v1/computed_yc_picks?fixture_date=gte.{today}"
-    requests.delete(delete_url, headers=get_supabase_headers(), timeout=30)
-    
-    # Insert new picks
-    insert_url = f"{SUPABASE_URL}/rest/v1/computed_yc_picks"
-    resp = requests.post(insert_url, headers=get_supabase_headers(), json=picks, timeout=30)
-    
-    if resp.status_code in [200, 201]:
+    try:
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM computed_yc_picks WHERE fixture_date >= %s", (today,))
+            if picks:
+                cols = list(picks[0].keys())
+                vals_template = ",".join(["%s"] * len(cols))
+                sql = f"INSERT INTO computed_yc_picks ({','.join(cols)}) VALUES ({vals_template})"
+                rows = [tuple(p.get(c) if not isinstance(p.get(c), (list, dict)) else json.dumps(p.get(c)) for c in cols) for p in picks]
+                psycopg2.extras.execute_batch(cur, sql, rows)
+            conn.commit()
+        conn.close()
         print(f"Successfully stored {len(picks)} picks")
         value_count = len([p for p in picks if p["tier"] == "VALUE"])
         lock_count = len([p for p in picks if p["tier"] == "LOCK"])
         print(f"  VALUE picks: {value_count}")
         print(f"  LOCK picks: {lock_count}")
-    else:
-        print(f"Error storing picks: {resp.status_code} - {resp.text[:200]}")
+    except Exception as e:
+        print(f"Error storing picks: {e}")
 
 
 if __name__ == "__main__":
-    if not SUPABASE_KEY:
-        print("ERROR: SUPABASE_KEY not set")
+    if not DATABASE_URL:
+        print("ERROR: DATABASE_URL not set")
         exit(1)
     compute_picks_with_odds()
