@@ -345,6 +345,12 @@ def store_picks(picks):
     try:
         conn = get_db_conn()
         with conn.cursor() as cur:
+            # Self-heal: ensure table exists
+            cur.execute("""CREATE TABLE IF NOT EXISTS computed_yc_picks (
+                id BIGSERIAL PRIMARY KEY, fixture_date DATE, player_name TEXT,
+                team TEXT, opponent TEXT, position TEXT, fixture TEXT, referee TEXT,
+                prob NUMERIC, odds NUMERIC, implied NUMERIC, edge NUMERIC, tier TEXT,
+                computed_at TIMESTAMPTZ DEFAULT now(), created_at TIMESTAMPTZ DEFAULT now())""")
             cur.execute("DELETE FROM computed_yc_picks WHERE fixture_date >= %s", (today,))
             if picks:
                 cols = list(picks[0].keys())
